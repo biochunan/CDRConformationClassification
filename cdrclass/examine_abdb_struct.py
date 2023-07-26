@@ -495,13 +495,13 @@ def assert_cdr_no_missing_residues(struct_fp: Path,
                 except AssertionError:
                     anchor_seqres_exist = False
                     cdr_containing_missing_residues[cdr] = True
-                    logger.error(f"{struct_id} {cdr} missing anchor residue {chain}{a}")
+                    logger.warning(f"{struct_id} {cdr} missing anchor residue {chain}{a}")
                 try:
                     assert anchor_seqres_id_end.shape[0] > 0
                 except AssertionError:
                     anchor_seqres_exist = False
                     cdr_containing_missing_residues[cdr] = True
-                    logger.error(f"{struct_id} {cdr} missing anchor residue {chain}{b}")
+                    logger.warning(f"{struct_id} {cdr} missing anchor residue {chain}{b}")
 
                 if anchor_seqres_exist:
                     # slice Merged Structure&Alignment DataFrame using anchor residue atmseq_id
@@ -525,13 +525,13 @@ def assert_cdr_no_missing_residues(struct_fp: Path,
         aln_str = print_format_alignment(alns=[str(i.seq) for i in H_aln],
                                          ids=[f"{struct_id}_H_SEQERS", f"{struct_id}_H_ATMSEQ"],
                                          return_fmt_aln_str=True)
-        logger.error(f"{struct_id}: Heavy chain alignment SEQRES vs. ATMSEQ:\n{aln_str}")
+        logger.info(f"{struct_id}: Heavy chain alignment SEQRES vs. ATMSEQ:\n{aln_str}")
 
     if True in result_L.values():
         aln_str = print_format_alignment(alns=[str(i.seq) for i in L_aln],
                                          ids=[f"{struct_id}_L_SEQERS", f"{struct_id}_L_ATMSEQ"],
                                          return_fmt_aln_str=True)
-        logger.error(f"{struct_id}: Light chain alignment SEQRES vs. ATMSEQ:\n{aln_str}")
+        logger.info(f"{struct_id}: Light chain alignment SEQRES vs. ATMSEQ:\n{aln_str}")
 
     # check missing residues
     if True in result_H.values() or True in result_L.values():
