@@ -11,6 +11,7 @@
 - joblib==1.3.1
 - biopython==1.81
 ```
+`clustal-omega` executable path, this is set default to `/usr/local/bin/clustalo` in `config/classify_general_abdb_entry.yaml`, change it to the correct path if necessary.
 
 ## Dependencies 
 - `ABDB `: a snapshot of AbDb database, the version used in the publication is `20220926`

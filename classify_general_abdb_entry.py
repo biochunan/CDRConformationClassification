@@ -4,7 +4,8 @@ using classifiers trained on unbound CDR conformations.
 """
 # basic
 import re
-import json 
+import json
+import shutil 
 import textwrap
 import argparse
 import numpy as np
@@ -36,6 +37,7 @@ logging.basicConfig(level=logging.ERROR,
                     datefmt='%H:%M:%S')
 logger = logging.getLogger(__name__)
 
+CLUSTALO = shutil.which("clustalo")
 
 # ==================== Function ====================
 def process_single_mar_file(
@@ -44,7 +46,8 @@ def process_single_mar_file(
     not_strict: bool = False, 
     resolution_thr: float = 2.8, 
     numbering_scheme: str = "ABM", 
-    clustal_omega_exe_fp: Path = Path("/usr/local/bin/clustal-omega"), b_factor_atom_set: List[str] = None, 
+    clustal_omega_exe_fp: Path = CLUSTALO, 
+    b_factor_atom_set: List[str] = None, 
     b_factor_cdr_thr: float = 80.
 ):
     
@@ -274,7 +277,6 @@ def extract_phi_psi_omega(struct_df: pd.DataFrame, add_residue_identifier: bool 
 
     return cdr_df
 
-
 # convert residue dihedral angles to trigonometric values for a single abdb file
 def convert_one_loop_dihedral_to_trigonometric_array(
     dihedral_df: pd.DataFrame,
@@ -314,63 +316,10 @@ def convert_one_loop_dihedral_to_trigonometric_array(
     return loop_repr
 
 
-# -----------------------
-# get info about clusters 
-# -----------------------
-
-# parse islands and orphans
-def read_island_orphans(fp: Path):
-    assert fp.exists()
-    data = {"exemplar": [], "clu_type": []}
-    with open(fp, 'r') as f:
-        for l in f:
-            if re.match(r"^Island \d+", l) or re.match(r"^Orphan \d+", l):
-                clu_name = re.search(r"(Island \d+|Orphan \d+)", l).group(1)
-                exemplar_name = re.findall(r"([A-Za-z\d]{4}_\d+\(\d+\))", l)
-                data["exemplar"].extend(exemplar_name)
-                data["clu_type"].extend([clu_name] * len(exemplar_name))
-
-    return pd.DataFrame(data)
-
-
-def get_exemplar_metadata(
-    lrc_df: pd.DataFrame,
-    lrc_island_orphan_df: pd.DataFrame,
-    query_field: str,
-    query_value: Union[str, int],
-) -> Tuple[str, int, str, str, int]:
-    """
-    Args:
-        lrc_df: (pd.DataFrame) that contains information about AP clusters within an LRC group
-            - lrc_info_df
-            - lrc_exemplar_df
-        lrc_island_orphan_df: (pd.DataFrame) multi- or single-AP-cluster Canonical clusters
-        query_value: (int) index of the query AP cluster in the lrc_info_df
-        query_field: (str) column name in lrc_df, e.g. clu_label, clu_index
-
-    Returns:
-        clu_lab: str
-        clu_size: int
-        clu_exemplar_id: str
-        clu_fam_type: str
-        clu_fam_size: int
-    """
-
-    clu_lab, clu_size, clu_exemplar_id = lrc_df[lrc_df[query_field] == query_value][
-        ["clu_label", "clu_size", "clu_center_ab_id"]].values[0]
-
-    clu_fam_type: str = lrc_island_orphan_df[lrc_island_orphan_df.exemplar == f"{clu_exemplar_id}({clu_size})"][
-        "clu_type"
-    ].values[0]  # island or orphan
-
-    clu_fam_size: int = (lrc_island_orphan_df.clu_type == clu_fam_type).sum()
-
-    return clu_lab, clu_size, clu_exemplar_id, clu_fam_type, clu_fam_size
-
-
-# ------------------------------------------------------------
-# funcs reqruied for merge_in_torsional and merge_in_cartesian
-# ------------------------------------------------------------
+# ---------------------------------------------
+# func required for 
+# `merge_in_torsional` and `merge_in_cartesian`
+# ---------------------------------------------
 # find CB residue identifiers
 def cb_ri(df: pd.DataFrame, cdr: str) -> List[str]:
     """
@@ -449,11 +398,14 @@ def superimpose_atoms(ref: np.ndarray, mob: np.ndarray) -> Tuple[np.ndarray, np.
 
 
 def atom_wise_dist(xyz_a: np.ndarray, xyz_b: np.ndarray):
-    atom_wise_distance = np.linalg.norm(xyz_a - xyz_b, axis=1, ord=2)  # Frobenius norm
+    """ Calculate atom-wise distance between 2 sets of atoms """
+    return np.linalg.norm(xyz_a - xyz_b, axis=1, ord=2)
 
-    return atom_wise_distance
 
-
+# --------------------
+# merge in torsion 
+# and cartesian
+# --------------------
 # determine whether merge bound vs. unbound cluster using AP cluster radius
 def merge_in_torsional(emb_a: np.ndarray, emb_b: np.ndarray, clu_radius: float, verbose: bool = True) -> bool:
     """
@@ -540,6 +492,7 @@ def merge_in_cartesian(bb_df_a: pd.DataFrame, bb_df_b: pd.DataFrame, cdr: str, v
     return merge_clu
 
 
+# fetch LRC, AP cluster, and Canonical cluster from the LRC_AP_cluster.json file
 def fetch_lrc_ap_can(lrc_ap_cluster: Dict[str, Any], lrc_name: str, ap_clu_idx: int) -> Tuple[Optional[Dict], Optional[Dict], Optional[Dict]]:
     """
     Fetch LRC, AP cluster, and Canonical cluster from the LRC_AP_cluster.json file
@@ -580,6 +533,7 @@ def fetch_lrc_ap_can(lrc_ap_cluster: Dict[str, Any], lrc_name: str, ap_clu_idx: 
         None,
     )
     return lrc, ap_clu, can_clu
+
 
 # --------------------
 # wrappers
@@ -766,7 +720,6 @@ def process_cdr(
     }
 
 
-
 def worker(
     abdbid: str, 
     cdr: str = None, 
@@ -858,6 +811,7 @@ if __name__ == "__main__":
     classifier_dir = Path(cfg["classifier"])
     LRC_AP_fp      = Path(cfg["LRC_AP_cluster"])
     outdir = Path.cwd().joinpath("results") if args.outdir is None else Path(args.outdir)
+        
     abdbid = args.abdbid
     cdr = args.cdr
     # mkdir
