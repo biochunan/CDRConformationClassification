@@ -15,7 +15,7 @@
 
 ## Dependencies 
 - `ABDB `: a snapshot of AbDb database, the version used in the publication is `20220926`, AbDb can be obtained from [abYbank](http://www.abybank.org/abdb/)
-<a href="http://www.abybank.org/abdb"> <img src='./figures/abYbank.png' height=456> </a>
+<a href="http://www.abybank.org/abdb"> <img src='./figures/abYbank.png'> </a>
 
 - `classifier`: CDR conformation classifiers output by this study, each classifier is a scikit-learn AP AffinityPropagation object, packed as `joblib` file, for details refer to scikit-learn documentation at [here](https://scikit-learn.org/stable/model_persistence.html)
 - `LRC_AP_cluster.json`: a JSON file containing information about LRC groups, Canonical clusters, and AP clusters
