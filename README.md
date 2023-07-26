@@ -14,15 +14,16 @@
 `clustal-omega` executable path, this is set default to `/usr/local/bin/clustalo` in `config/classify_general_abdb_entry.yaml`, change it to the correct path if necessary.
 
 ## Dependencies 
-- `ABDB `: a snapshot of AbDb database, the version used in the publication is `20220926`
+- `ABDB `: a snapshot of AbDb database, the version used in the publication is `20220926`, AbDb can be obtained from [abYbank](http://www.abybank.org/abdb/)
+<a href="http://www.abybank.org/abdb"> <img src='./figures/abYbank.png' height=456> </a>
+
 - `classifier`: CDR conformation classifiers output by this study, each classifier is a scikit-learn AP AffinityPropagation object, packed as `joblib` file, for details refer to scikit-learn documentation at [here](https://scikit-learn.org/stable/model_persistence.html)
 - `LRC_AP_cluster.json`: a JSON file containing information about LRC groups, Canonical clusters, and AP clusters
   
-Place these folders and files inside `./dirs` or create soft links inside `./dirs` point to them, for example 
+Place ABDB inside `./dirs` or create a softlink inside `./dirs` point to it, for example 
 ```
 $ cd ./dirs
 $ ln -s /path/to/ABDB ./ABDB
-$ ln -s /path/to/classifier ./classifier
 ```
 
 ## Usage
