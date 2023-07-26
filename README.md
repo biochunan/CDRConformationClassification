@@ -67,17 +67,17 @@ This outputs a JSON file in `./results` directory, the file name is `1a2y_0P.jso
 ```
 Here, only the H1 CDR loop is classified, the classification results are stored in a list of dictionaries, each dictionary contains the classification results for a CDR loop.
 
-- "closest_lrc": the closest LRC group in torsional space 
-- "closest_AP_cluster_label": the closest AP cluster label, this is a unique integer assigned to each AP cluster within a LRC group
-- "closest_AP_cluster_exemplar_id": the closest AP cluster exemplar ID, this is the ID of the structure that is used as the exemplar for the AP cluster
-- "closest_AP_cluster_size": the size of the closest AP cluster, this is the number of structures in the AP cluster
-- "closest_can_cluster_index": the closest canonical cluster index, this is the index of the canonical cluster that the closest AP cluster belongs to, and this is a unique integer assigned to each canonical cluster within a LRC group
-- "merged_AP_cluster_label": the merged AP cluster label, this is a unique integer assigned to each AP cluster within a LRC group
-- "merged_AP_cluster_exemplar_id": the merged AP cluster exemplar ID, this is the ID of the structure that is used as the exemplar for the AP cluster
-- "merged_AP_cluster_size": the size of the merged AP cluster, this is the number of structures in the AP cluster
-- "merged_can_cluster_index": the merged canonical cluster index, this is the index of the canonical cluster that the merged AP cluster belongs to, and this is a unique integer assigned to each canonical cluster within a LRC group
-- "merge_with_closest_exemplar_torsional": True if the query CDR conformation is merged with the closest AP cluster measured in torsional space
-- "merge_with_any_exemplar_cartesian": 
+- `closest_lrc`: the closest LRC group in torsional space 
+- `closest_AP_cluster_label`: the closest AP cluster label, this is a unique integer assigned to each AP cluster within a LRC group
+- `closest_AP_cluster_exemplar_id`: the closest AP cluster exemplar ID, this is the ID of the structure that is used as the exemplar for the AP cluster
+- `closest_AP_cluster_size`: the size of the closest AP cluster, this is the number of structures in the AP cluster
+- `closest_can_cluster_index`: the closest canonical cluster index, this is the index of the canonical cluster that the closest AP cluster belongs to, and this is a unique integer assigned to each canonical cluster within a LRC group
+- `merged_AP_cluster_label`: the merged AP cluster label, this is a unique integer assigned to each AP cluster within a LRC group
+- `merged_AP_cluster_exemplar_id`: the merged AP cluster exemplar ID, this is the ID of the structure that is used as the exemplar for the AP cluster
+- `merged_AP_cluster_size`: the size of the merged AP cluster, this is the number of structures in the AP cluster
+- `merged_can_cluster_index`: the merged canonical cluster index, this is the index of the canonical cluster that the merged AP cluster belongs to, and this is a unique integer assigned to each canonical cluster within a LRC group
+- `merge_with_closest_exemplar_torsional`: True if the query CDR conformation is merged with the closest AP cluster measured in torsional space
+- `merge_with_any_exemplar_cartesian`: 
   - `True` if the query CDR conformation is merged with an AP cluster measured in Cartesian space
   - `False` otherwise  
   - `null` if searching in Cartesian space was not carried out, i.e. the query CDR conformation is merged with the closest AP cluster measured in torsional space
