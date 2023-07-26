@@ -1,0 +1,12 @@
+__pycache__
+cdrclass.egg-info
+dirs/ABDB
+dirs/bb
+dirs/classifier
+dirs/exemplar
+cdrclass/__pycache__
+*.json
+.vscode
+build
+*.log
+*.err
