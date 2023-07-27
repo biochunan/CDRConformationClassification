@@ -72,7 +72,6 @@ This outputs a JSON file in `./results` directory, the file name is `1ikf_0P.jso
             "merged": true
         }
     },
-    ...
 ]
 ```
 Here, use CDR-H1 loop as an example, the classification results are stored in a list of dictionaries, each dictionary contains the classification results for a CDR loop.
