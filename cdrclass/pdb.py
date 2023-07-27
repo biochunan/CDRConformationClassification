@@ -10,36 +10,6 @@ from Bio.PDB import PDBParser, Structure, Atom
 from cdrclass.alphabet import AA_3to1
 
 
-def chain2df(chain_obj: Bio.PDB.Chain.Chain, **kwargs) -> pd.DataFrame:
-    """
-    Turn structure chain into DataFrame, iterate over residues
-    Wrapper of function unpack_chain, to accept a struct
-
-    Args:
-        chain_obj: (chain: Bio.PDB.Chain.Chain)
-        kwargs: retain_hetatm, retain_water, retain_b_factor
-
-    Returns:
-        df: (pd.DataFrame) DataFrame
-    """
-    # d = dict(node_id=[], chain=[], resi=[], alt=[], resn=[], atom=[], element=[], x=[], y=[], z=[])
-    retain_hetatm = kwargs.get("retain_hetatm", False)
-    retain_water = kwargs.get("retain_water", False)
-    retain_b_factor = kwargs.get("retain_b_factor", False)
-    d = unpack_chain(
-        chain_obj=chain_obj,
-        retain_hetatm=retain_hetatm,
-        retain_water=retain_water,
-        retain_b_factor=retain_b_factor
-    )
-
-    df = pd.DataFrame(d)
-    # curate column data type
-    df["node_id"] = df.node_id.astype("Int64")
-
-    return df
-
-
 def init_struct_dict():
     return dict(
         node_id=[], chain=[],  # chain
