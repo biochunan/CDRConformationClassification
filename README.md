@@ -1,4 +1,13 @@
-# Predict the CDR conformation for CDR loops in an AbDb structure 
+# Antibody CDR conformation classification 
+
+Implementation of antibody CDR conformation classification method for [Conformational analysis of antibody CDR loops upon binding]()
+
+Unbound CDR conformation clusters, both Canonical and affinity propagation (AP) clusters grouped as LRCs, in this publication are placed in [dirs/classifier](./dirs/classifier).
+- Each classifier is a scikit-learn AP AffinityPropagation object, packed as `joblib` file, for details refer to scikit-learn documentation at [here](https://scikit-learn.org/stable/model_persistence.html)
+
+A JSON file summarizing the LRC groups, Canonical clusters, and AP clusters is placed in [dirs/LRC_AP_cluster.json](./dirs/LRC_AP_cluster.json).
+
+A snapshot of AbDb version `20220926` will be available on [Zenodo](https://zenodo.org/) upon publication. 
 
 ## Requirements
 ```
@@ -14,13 +23,11 @@
 `clustal-omega` executable path, this is set default to `/usr/local/bin/clustalo` in `config/classify_general_abdb_entry.yaml`, change it to the correct path if necessary.
 
 ## Dependencies 
-- `ABDB `: a snapshot of AbDb database, the version used in the publication is `20220926`, AbDb can be obtained from [abYbank](http://www.abybank.org/abdb/)
+The script `classify_general_abdb_entry.py` (see [Usage](#usage)) for CDR conformation classification takes an AbDb antibody file as input, you can obtain AbDb from [abYbank](http://www.abybank.org/abdb/), the version used in the publication is `20220926`.
+
 <a href="http://www.abybank.org/abdb"> <img src='./figures/abYbank.png'> </a>
 
-- `classifier`: CDR conformation classifiers output by this study, each classifier is a scikit-learn AP AffinityPropagation object, packed as `joblib` file, for details refer to scikit-learn documentation at [here](https://scikit-learn.org/stable/model_persistence.html)
-- `LRC_AP_cluster.json`: a JSON file containing information about LRC groups, Canonical clusters, and AP clusters
-  
-Place ABDB inside `./dirs` or create a softlink inside `./dirs` point to it, for example 
+After download AbDb, place it inside `./dirs` or simply create a softlink inside `./dirs` pointing to it, for example 
 ```
 $ cd ./dirs
 $ ln -s /path/to/ABDB ./ABDB
@@ -38,23 +45,23 @@ $ cd /path/to/CDRConformationClassification
 $ pip install .  
 ```
 
-Run classification on a single AbDb structure
+Run classification on a single AbDb structure, for example `1a2y_0P`
 ```bash
 $ python classify_general_abdb_entry.py \
     --cdr all \
     --outdir ./results \
     --config ./config/classify_general_abdb_entry-runtime.yaml \
-    1a2y_0P
+    1ikf_0P
 ```
-This outputs a JSON file in `./results` directory, the file name is `1a2y_0P.json`, it should look like the following: 
+This outputs a JSON file in `./results` directory, the file name is `1ikf_0P.json`, it has the following content: 
 ```JSON
 [
     {
         "H1": {
             "closest_lrc": "H1-10-allT",
-            "closest_AP_cluster_label": 46,
-            "closest_AP_cluster_exemplar_id": "6azk_0",
-            "closest_AP_cluster_size": 93,
+            "closest_AP_cluster_label": 35,
+            "closest_AP_cluster_exemplar_id": "4z95_0",
+            "closest_AP_cluster_size": 105,
             "closest_can_cluster_index": 1,
             "merged_AP_cluster_label": null,
             "merged_AP_cluster_exemplar_id": null,
@@ -65,9 +72,10 @@ This outputs a JSON file in `./results` directory, the file name is `1a2y_0P.jso
             "merged": true
         }
     },
+    ...
 ]
 ```
-Here, only the H1 CDR loop is classified, the classification results are stored in a list of dictionaries, each dictionary contains the classification results for a CDR loop.
+Here, use CDR-H1 loop as an example, the classification results are stored in a list of dictionaries, each dictionary contains the classification results for a CDR loop.
 
 - `closest_lrc`: the closest LRC group in torsional space 
 - `closest_AP_cluster_label`: the closest AP cluster label, this is a unique integer assigned to each AP cluster within a LRC group
@@ -87,22 +95,9 @@ Here, only the H1 CDR loop is classified, the classification results are stored 
   - `True` if the query CDR conformation is merged with an AP cluster`, 
   - `False` otherwise
 
-Note, if a query CDR conformation is not merged with any AP cluster, those fields starts with `merged_` will be `null`, for example:
-```JSON
-{
-        "H1": {
-            "closest_lrc": "H1-10-allT",
-            "closest_AP_cluster_label": 7,
-            "closest_AP_cluster_exemplar_id": "1hkl_0",
-            "closest_AP_cluster_size": 1,
-            "closest_can_cluster_index": 5,
-            "merged_AP_cluster_label": null,
-            "merged_AP_cluster_exemplar_id": null,
-            "merged_AP_cluster_size": null,
-            "merged_can_cluster_index": null,
-            "merge_with_closest_exemplar_torsional": false,
-            "merge_with_any_exemplar_cartesian": false,
-            "merged": false
-        }
-}
-```
+In this case, the query CDR-H1 loop conformation (CDR-H1 loop in `1ikf_0P`) is merged with the closest AP cluster in torsional space whose exemplar is the CDR-H1 loop in `6azk_0`. 
+
+See the following gif for the visualization of CDR-H1 loop conformation of `1ikf_0P` (lightblue) superimposed onto the CDR-H1 loop of the closest AP cluster exemplar `6azk_0` (blue).
+
+<img src='figures/1ikf_0P.0.gif'>
+
