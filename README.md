@@ -99,5 +99,5 @@ In this case, the query CDR-H1 loop conformation (CDR-H1 loop in `1ikf_0P`) is m
 
 See the following gif for the visualization of CDR-H1 loop conformation of `1ikf_0P` (lightblue) superimposed onto the CDR-H1 loop of the closest AP cluster exemplar `6azk_0` (blue).
 
-<img src='figures/1ikf_0P.0.gif'>
+<img src='figures/1ikf_0P.0.gif' width=350>
 
