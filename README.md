@@ -45,7 +45,7 @@ $ cd /path/to/CDRConformationClassification
 $ pip install .  
 ```
 
-Run classification on a single AbDb structure, for example `1a2y_0P`
+Run classification on a single AbDb structure, for example `1ikf_0P`
 ```bash
 $ python classify_general_abdb_entry.py \
     --cdr all \
