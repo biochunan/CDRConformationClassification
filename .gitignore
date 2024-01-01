@@ -7,3 +7,5 @@ dirs/ABDB
 *.json
 *.log
 *.err
+debug
+dev
