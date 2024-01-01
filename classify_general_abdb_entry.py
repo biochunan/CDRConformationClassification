@@ -782,7 +782,9 @@ def worker(
     return results
 
 
-# input   
+# --------------------
+# Main
+# --------------------
 def cli():  # sourcery skip: inline-immediately-returned-variable
     parser = argparse.ArgumentParser()
     parser.add_argument("abdbid", type=str, help="input file path")
@@ -803,9 +805,7 @@ def cli():  # sourcery skip: inline-immediately-returned-variable
     
     return args, config 
 
-
-# ==================== Main ====================
-if __name__ == "__main__":
+def main(args):
     args, cfg = cli()
     ABDB           = Path(cfg["ABDB"]).expanduser()
     classifier_dir = Path(cfg["classifier"])
@@ -818,7 +818,6 @@ if __name__ == "__main__":
     outdir.mkdir(parents=True, exist_ok=True)
     
     # parse the LRC_AP_cluster.json
-    import json 
     with open(LRC_AP_fp, "r") as f:
         LRC_AP_CLUSTER = json.load(f)
     
@@ -834,3 +833,11 @@ if __name__ == "__main__":
     # save results
     with open(outdir/f"{abdbid}.json", "w") as f:
         json.dump(results, f, indent=4)
+
+def app(): 
+    args = cli() 
+    main(args)
+
+# ==================== Main ====================
+if __name__ == "__main__":
+    app()
