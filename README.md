@@ -50,7 +50,7 @@ Run classification on a single AbDb structure, for example `1ikf_0P`
 $ python classify_general_abdb_entry.py \
     --cdr all \
     --outdir ./results \
-    --config ./config/classify_general_abdb_entry-runtime.yaml \
+    --config ./config/classify_general_abdb_entry.yaml \
     1ikf_0P
 ```
 This outputs a JSON file in `./results` directory, the file name is `1ikf_0P.json`, it has the following content: 
