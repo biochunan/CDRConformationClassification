@@ -38,7 +38,7 @@ import logging
 logger = logging.getLogger("examine_abdb_struct")
 
 
-def generate_anchor_residue_identifier(cdr_dict: Dict[str, Dict[str, List[str]]], numbering_scheme: str):
+def generate_anchor_residue_identifier(cdr_dict: Dict[str, Dict[str, List[str]]], numbering_scheme: str) -> Dict[str, List[Tuple[str, int]]]:
     """
     e.g.
     >>> generate_anchor_residue_identifier(CDR_HASH, "ABM")
@@ -126,9 +126,9 @@ def extract_atmseq_seqres(struct_fp: Path) -> Tuple[Dict[str, str], Dict[str, st
 
 
 def assign_cdr_class(df: pd.DataFrame, cdr_dict: Dict[str, str]):
-    assert "chain" in df.columns and "resi" in df.columns
+    assert "chain_type" in df.columns and "residue_number" in df.columns
     df["cdr"] = [
-        cdr_dict.get(k, "") for k in map(lambda cr: f"{cr[0]}{cr[1]}", df[["chain", "resi"]].values)
+        cdr_dict.get(k, "") for k in map(lambda cr: f"{cr[0]}{cr[1]}", df[["chain_type", "residue_number"]].values)
     ]
     return df
 
@@ -160,19 +160,32 @@ def gen_struct_cdr_df(struct_fp: Path,
     chain_objs = {c.id: c for c in unfold_entities(structure, "C")}
 
     # H and L chain Structure DataFrame
-    df_H = assign_cdr_class(df=chain2df(chain_objs["H"],
-                                        retain_hetatm=retain_hetatm,
-                                        retain_water=retain_water,
-                                        retain_b_factor=retain_b_factor),
-                            cdr_dict=cdr_dict)
-    df_L = assign_cdr_class(df=chain2df(chain_objs["L"],
-                                        retain_hetatm=retain_hetatm,
-                                        retain_water=retain_water,
-                                        retain_b_factor=retain_b_factor),
-                            cdr_dict=cdr_dict)
-    if concat:
-        df_L["node_id"] += df_H.node_id.max() + 1
-        return pd.concat([df_H, df_L], axis=0)
+    df_H, df_L = [], []
+    for chain_label, chain_obj in chain_objs.items():
+        if chain_label in ('H', 'h', 'L', 'l'):
+            df = chain2df(chain_obj=chain_obj,
+                          retain_hetatm=retain_hetatm,
+                          retain_water=retain_water,
+                          retain_b_factor=retain_b_factor)
+            chain_type = "H" if chain_label in ('H', 'h') else "L"
+            df['chain_type'] = chain_type
+            df['residue_number'] = df['resi']
+            if chain_label in ('H', 'h'):
+                df_H.append({'chain_type': 'H', 
+                             'chain_label': chain_label,
+                             'df': assign_cdr_class(df=df, cdr_dict=cdr_dict)})
+            else:
+                df_L.append({'chain_type': 'L', 
+                             'chain_label': chain_label,
+                             'df': assign_cdr_class(df=df, cdr_dict=cdr_dict)})
+    
+    if concat: 
+        # iterate over df_H and df_L, and add the max node_id of previous df to the current df
+        dfs = []
+        for df in df_H + df_L:
+            df["node_id"] += dfs[-1]["node_id"].max() + 1 if len(dfs) > 0 else 0
+            dfs.append(df.copy())
+        return pd.concat(dfs, axis=0)
 
     return df_H, df_L
 
@@ -339,14 +352,140 @@ def assert_seqres_atmseq_length(struct_fp: Path,
     return chain_length_okay
 
 
-def assert_cdr_no_missing_residues(struct_fp: Path,
-                                   clustal_omega_executable: str,
-                                   numbering_scheme: str,
-                                   atmseq: Optional[Dict[str, str]] = None,
-                                   seqres: Optional[Dict[str, str]] = None,
-                                   df_H: pd.DataFrame = None,
-                                   df_L: pd.DataFrame = None,
-                                   ) -> bool:
+def _gen_seq_id(seq_iterable: Sequence[str]):
+        n = -1
+        for char in seq_iterable:
+            if char != "-":
+                n += 1
+                yield n
+            else:
+                yield char
+
+
+def _cdr_has_missing_residues(*, 
+                              merged_df: pd.DataFrame, 
+                              chain_type: str,
+                              anchor_res: Dict[str, List[Tuple[str, int]]],
+                              struct_id: str):
+    """
+    Find CDR missing residues (if any)
+    Updates: use anchor residue as boundary residue node_id
+
+    e.g. merged_df of pdb3lrs_1.mar
+    node_id, chain, resi, alt, cdr, seqres_id, atmseq_id, seqres, atmseq
+        96    ,     H,   93,    ,    ,        96,        96,      A,      A
+        97    ,     H,   94,    ,    ,        97,        97,      R,      R     # =====> anchor residue "H94" <=====
+    --------------------------------------------------------------------------------------------------------------
+        98    ,     H,   95,    ,  H3,        98,        98,      E,      E     # CDR-H3 loop
+        99    ,     H,   96,    ,  H3,        99,        99,      A,      A     # CDR-H3 loop
+       100    ,     H,   97,    ,  H3,       100,       100,      G,      G     # CDR-H3 loop
+       101    ,     H,   98,    ,  H3,       101,       101,      G,      G     # CDR-H3 loop
+       102    ,     H,   99,    ,  H3,       102,       102,      P,      P     # CDR-H3 loop
+       nan    ,   nan,  nan, nan, nan,       103,         -,      I,      -     # CDR-H3 loop
+       nan    ,   nan,  nan, nan, nan,       104,         -,      W,      -     # CDR-H3 loop
+       nan    ,   nan,  nan, nan, nan,       105,         -,      H,      -     # CDR-H3 loop
+       nan    ,   nan,  nan, nan, nan,       106,         -,      D,      -     # CDR-H3 loop
+       nan    ,   nan,  nan, nan, nan,       107,         -,      D,      -     # CDR-H3 loop
+       nan    ,   nan,  nan, nan, nan,       108,         -,      V,      -     # CDR-H3 loop
+       nan    ,   nan,  nan, nan, nan,       109,         -,      K,      -     # CDR-H3 loop
+       nan    ,   nan,  nan, nan, nan,       110,         -,      Y,      -     # CDR-H3 loop
+       nan    ,   nan,  nan, nan, nan,       111,         -,      Y,      -     # CDR-H3 loop
+       nan    ,   nan,  nan, nan, nan,       112,         -,      D,      -     # CDR-H3 loop
+       nan    ,   nan,  nan, nan, nan,       113,         -,      F,      -     # CDR-H3 loop
+       nan    ,   nan,  nan, nan, nan,       114,         -,      N,      -     # CDR-H3 loop
+       nan    ,   nan,  nan, nan, nan,       115,         -,      D,      -     # CDR-H3 loop
+       nan    ,   nan,  nan, nan, nan,       116,         -,      G,      -     # CDR-H3 loop
+       103    ,     H,  100,   N,  H3,       117,       103,      Y,      Y     # CDR-H3 loop
+       104    ,     H,  100,   O,  H3,       118,       104,      Y,      Y     # CDR-H3 loop
+       105    ,     H,  100,   P,  H3,       119,       105,      N,      N     # CDR-H3 loop
+       106    ,     H,  100,   Q,  H3,       120,       106,      Y,      Y     # CDR-H3 loop
+       107    ,     H,  100,   R,  H3,       121,       107,      H,      H     # CDR-H3 loop
+       108    ,     H,  100,   S,  H3,       122,       108,      Y,      Y     # CDR-H3 loop
+       109    ,     H,  100,   T,  H3,       123,       109,      M,      M     # CDR-H3 loop
+       110    ,     H,  101,    ,  H3,       124,       110,      D,      D     # CDR-H3 loop
+       111    ,     H,  102,    ,  H3,       125,       111,      V,      V     # CDR-H3 loop
+    --------------------------------------------------------------------------------------------------------------
+       112    ,     H,  103,    ,    ,       126,       112,      W,      W     # =====> anchor residue "H103" <=====
+       113    ,     H,  104,    ,    ,       127,       113,      G,      G
+
+    - `nan`: denotes empty cells, 
+    - empty cells => empty str i.e. ''
+
+    Args:
+        merged_df: (DataFrame) struct dataframe
+        chain_type: (str) either "H" or "L"
+        anchor_res: (Dict) anchor residue identifier
+        struct_id: (str) structure id
+    Returns:
+        cdr_containing_missing_residues: (Dict) key: cdr loop name; val: bool
+    """
+    # if chain_type not in the dataframe, add column chain_type 
+    assert chain_type in ('H', 'L')
+    if "chain_type" not in merged_df.columns:
+        merged_df["chain_type"] = chain_type
+    # out vars
+    cdr_containing_missing_residues = {}
+
+    # iterate over H1 H2 H3 OR L1 L2 L3 depending on `chain`
+    for i in (1, 2, 3):
+        # cdr loop name
+        cdr = f"{chain_type}{i}"
+
+        # assert there are CDR residues in the merged DataFrame
+        cdr_loop_exist = True
+        r = merged_df[merged_df["cdr"] == cdr]["seqres_id"].values
+        if r.shape[0] == 0:
+            # no CDR loop was found in the merged DataFrame
+            cdr_loop_exist = False
+            cdr_containing_missing_residues[cdr] = True
+            logger.error(f"{struct_id}: CDR {cdr} is missing")
+
+        if cdr_loop_exist:
+            # Then examine missing residues using anchor residues
+            # get anchor residue seqres_id
+            a, b = anchor_res[cdr][0][1], anchor_res[cdr][1][1]
+            anchor_seqres_id_begin = merged_df[(merged_df.chain_type == chain_type) & (merged_df.resi == a)].seqres_id.values
+            anchor_seqres_id_end = merged_df[(merged_df.chain_type == chain_type) & (merged_df.resi == b)].seqres_id.values
+
+            # assert anchor residues exist
+            anchor_seqres_exist = True
+            try:
+                assert anchor_seqres_id_begin.shape[0] > 0
+            except AssertionError:
+                anchor_seqres_exist = False
+                cdr_containing_missing_residues[cdr] = True
+                logger.warning(f"{struct_id} {cdr} missing anchor residue {chain_type}{a}")
+            try:
+                assert anchor_seqres_id_end.shape[0] > 0
+            except AssertionError:
+                anchor_seqres_exist = False
+                cdr_containing_missing_residues[cdr] = True
+                logger.warning(f"{struct_id} {cdr} missing anchor residue {chain_type}{b}")
+
+            if anchor_seqres_exist:
+                # slice Merged Structure&Alignment DataFrame using anchor residue atmseq_id
+                cdr_loop = merged_df[(merged_df.seqres_id > anchor_seqres_id_begin[0]) &
+                                        (merged_df.seqres_id < anchor_seqres_id_end[0])]["atmseq"].values
+                # if "-" in `atmseq`, then set `cdr_containing_missing_residues[cdr]` to True
+                if "-" in cdr_loop:
+                    cdr_containing_missing_residues[cdr] = True
+                    logger.error(f"{struct_id}: CDR {cdr} has missing residues.")
+                else:
+                    cdr_containing_missing_residues[cdr] = False
+
+    return cdr_containing_missing_residues
+
+
+def assert_cdr_no_missing_residues_core(struct_fp: Path,
+                                        chain_label: str, 
+                                        chain_type: str,
+                                        struct_df: pd.DataFrame,
+                                        clustal_omega_executable: str, 
+                                        numbering_scheme: str,
+                                        atmseq: str,
+                                        seqres: str,
+                                        ) -> bool:
+    df = struct_df.copy()
     # vars
     numbering_scheme = numbering_scheme.upper()
     struct_id = struct_fp.stem
@@ -363,36 +502,23 @@ def assert_cdr_no_missing_residues(struct_fp: Path,
         raise ValueError(f"Numbering scheme must be either `Chothia` or `AbM`. Provided: {numbering_scheme}")
 
     # Align Heavy chain, seq1: SEQRES, seq2: ATMSEQ
-    H_aln = pairwise_align_clustalomega(clustal_omega_executable=clustal_omega_executable,
-                                        seq1=seqres["H"], seq2=atmseq["H"].replace("X", ""))
-    L_aln = pairwise_align_clustalomega(clustal_omega_executable=clustal_omega_executable,
-                                        seq1=seqres["L"], seq2=atmseq["L"].replace("X", ""))
+    logger.debug(f"{struct_id} aligning {chain_type} chain {chain_label} ...")
+    if 'X' in atmseq:
+        logger.warning(f"{struct_id} {chain_type=} {chain_label=} atmseq contains 'X' residues, removing ...")
+        atmseq = atmseq.replace('X', '')
+    aln = pairwise_align_clustalomega(clustal_omega_executable=clustal_omega_executable,
+                                      seq1=seqres,
+                                      seq2=atmseq.replace("X", ""))
 
     # Create two DataFrames for each chain
     # DF 1: Structure DataFrame containing info about (1) CDR labels; (2) node id.
-    if df_H is None or df_L is None:
-        df_H, df_L = gen_struct_cdr_df(struct_fp=struct_fp, cdr_dict=CDR_HASH_REV[numbering_scheme])
-    df_H = df_H.drop_duplicates("node_id", ignore_index=True)
-    df_L = df_L.drop_duplicates("node_id", ignore_index=True)
+    df = df.drop_duplicates("node_id", ignore_index=True)
 
     # DF 2: convert alignment string (SEQERS vs. ATMSEQ) to DataFrame => Alignment DataFrame
-    def gen_seq_id(seq_iterable: Sequence[str]):
-        n = -1
-        for char in seq_iterable:
-            if char != "-":
-                n += 1
-                yield n
-            else:
-                yield char
-
-    df_aln_H = pd.DataFrame(dict(seqres_id=gen_seq_id(H_aln[0].seq),
-                                 atmseq_id=gen_seq_id(H_aln[1].seq),
-                                 seqres=list(H_aln[0].seq),
-                                 atmseq=list(H_aln[1].seq)))
-    df_aln_L = pd.DataFrame(dict(seqres_id=gen_seq_id(L_aln[0].seq),
-                                 atmseq_id=gen_seq_id(L_aln[1].seq),
-                                 seqres=list(L_aln[0].seq),
-                                 atmseq=list(L_aln[1].seq)))
+    df_aln = pd.DataFrame(dict(seqres_id=_gen_seq_id(aln[0].seq),
+                                    atmseq_id=_gen_seq_id(aln[1].seq),
+                                    seqres=list(aln[0].seq),
+                                    atmseq=list(aln[1].seq)))
     """
     e.g. if missing residues, 3lrs_1
     seqres_id, atmseq_id, seqres, atmseq 
@@ -406,160 +532,52 @@ def assert_cdr_no_missing_residues(struct_fp: Path,
     118,       104      ,   Y   ,     Y 
     """
     # Merge Alignment DataFrame with Structure DataFrame on atmseq_id (node_id)
-    df_aln_H = pd.merge(df_H[["node_id", "chain", "resi", "alt", "cdr"]], df_aln_H,
-                        left_on="node_id", right_on="atmseq_id",
+    df_aln_m = pd.merge(df[["node_id", "chain", "resi", "alt", "cdr"]], 
+                        df_aln,
+                        left_on="node_id", 
+                        right_on="atmseq_id",
                         how="outer")
-    df_aln_H = df_aln_H.sort_values(by=["seqres_id"], ascending=True)
-    df_aln_L = pd.merge(df_L[["node_id", "chain", "resi", "alt", "cdr"]], df_aln_L,
-                        left_on="node_id", right_on="atmseq_id",
-                        how="outer")
-    df_aln_L = df_aln_L.sort_values(by=["seqres_id"], ascending=True)
-
-    # func to find CDR missing residues if any
-    def cdr_has_missing_residues(merged_df, chain: str):
-        """
-        Find CDR missing residues (if any)
-        Updates: use anchor residue as boundary residue node_id
-
-        e.g. merged_df of pdb3lrs_1.mar
-        node_id, chain, resi, alt, cdr, seqres_id, atmseq_id, seqres, atmseq
-         96    ,     H,   93,    ,    ,        96,        96,      A,      A
-         97    ,     H,   94,    ,    ,        97,        97,      R,      R     # =====> anchor residue "H94" <=====
-        --------------------------------------------------------------------------------------------------------------
-         98    ,     H,   95,    ,  H3,        98,        98,      E,      E     # CDR-H3 loop
-         99    ,     H,   96,    ,  H3,        99,        99,      A,      A     # CDR-H3 loop
-        100    ,     H,   97,    ,  H3,       100,       100,      G,      G     # CDR-H3 loop
-        101    ,     H,   98,    ,  H3,       101,       101,      G,      G     # CDR-H3 loop
-        102    ,     H,   99,    ,  H3,       102,       102,      P,      P     # CDR-H3 loop
-        nan    ,   nan,  nan, nan, nan,       103,         -,      I,      -     # CDR-H3 loop
-        nan    ,   nan,  nan, nan, nan,       104,         -,      W,      -     # CDR-H3 loop
-        nan    ,   nan,  nan, nan, nan,       105,         -,      H,      -     # CDR-H3 loop
-        nan    ,   nan,  nan, nan, nan,       106,         -,      D,      -     # CDR-H3 loop
-        nan    ,   nan,  nan, nan, nan,       107,         -,      D,      -     # CDR-H3 loop
-        nan    ,   nan,  nan, nan, nan,       108,         -,      V,      -     # CDR-H3 loop
-        nan    ,   nan,  nan, nan, nan,       109,         -,      K,      -     # CDR-H3 loop
-        nan    ,   nan,  nan, nan, nan,       110,         -,      Y,      -     # CDR-H3 loop
-        nan    ,   nan,  nan, nan, nan,       111,         -,      Y,      -     # CDR-H3 loop
-        nan    ,   nan,  nan, nan, nan,       112,         -,      D,      -     # CDR-H3 loop
-        nan    ,   nan,  nan, nan, nan,       113,         -,      F,      -     # CDR-H3 loop
-        nan    ,   nan,  nan, nan, nan,       114,         -,      N,      -     # CDR-H3 loop
-        nan    ,   nan,  nan, nan, nan,       115,         -,      D,      -     # CDR-H3 loop
-        nan    ,   nan,  nan, nan, nan,       116,         -,      G,      -     # CDR-H3 loop
-        103    ,     H,  100,   N,  H3,       117,       103,      Y,      Y     # CDR-H3 loop
-        104    ,     H,  100,   O,  H3,       118,       104,      Y,      Y     # CDR-H3 loop
-        105    ,     H,  100,   P,  H3,       119,       105,      N,      N     # CDR-H3 loop
-        106    ,     H,  100,   Q,  H3,       120,       106,      Y,      Y     # CDR-H3 loop
-        107    ,     H,  100,   R,  H3,       121,       107,      H,      H     # CDR-H3 loop
-        108    ,     H,  100,   S,  H3,       122,       108,      Y,      Y     # CDR-H3 loop
-        109    ,     H,  100,   T,  H3,       123,       109,      M,      M     # CDR-H3 loop
-        110    ,     H,  101,    ,  H3,       124,       110,      D,      D     # CDR-H3 loop
-        111    ,     H,  102,    ,  H3,       125,       111,      V,      V     # CDR-H3 loop
-        --------------------------------------------------------------------------------------------------------------
-        112    ,     H,  103,    ,    ,       126,       112,      W,      W     # =====> anchor residue "H103" <=====
-        113    ,     H,  104,    ,    ,       127,       113,      G,      G
-
-        where nan denotes empty cells, cells without a value are empty str i.e. ""
-
-        Args:
-            merged_df: (DataFrame) struct dataframe
-            chain: (str) either "H" or "L"
-        """
-        # out vars
-        cdr_containing_missing_residues = {}
-
-        # iterate over H1 H2 H3 OR L1 L2 L3 depending on `chain`
-        for i in (1, 2, 3):
-            # cdr loop name
-            cdr = f"{chain}{i}"
-
-            # assert there are CDR residues in the merged DataFrame
-            cdr_loop_exist = True
-            r = merged_df[merged_df["cdr"] == cdr]["seqres_id"].values
-            if r.shape[0] == 0:
-                # no CDR loop was found in the merged DataFrame
-                cdr_loop_exist = False
-                cdr_containing_missing_residues[cdr] = True
-                logger.error(f"{struct_id}: CDR {cdr} is missing")
-
-            if cdr_loop_exist:
-                # Then examine missing residues using anchor residues
-                # get anchor residue seqres_id
-                a, b = ANCHOR_RES[cdr][0][1], ANCHOR_RES[cdr][1][1]
-                anchor_seqres_id_begin = merged_df[(merged_df.chain == chain) & (merged_df.resi == a)].seqres_id.values
-                anchor_seqres_id_end = merged_df[(merged_df.chain == chain) & (merged_df.resi == b)].seqres_id.values
-
-                # assert anchor residues exist
-                anchor_seqres_exist = True
-                try:
-                    assert anchor_seqres_id_begin.shape[0] > 0
-                except AssertionError:
-                    anchor_seqres_exist = False
-                    cdr_containing_missing_residues[cdr] = True
-                    logger.warning(f"{struct_id} {cdr} missing anchor residue {chain}{a}")
-                try:
-                    assert anchor_seqres_id_end.shape[0] > 0
-                except AssertionError:
-                    anchor_seqres_exist = False
-                    cdr_containing_missing_residues[cdr] = True
-                    logger.warning(f"{struct_id} {cdr} missing anchor residue {chain}{b}")
-
-                if anchor_seqres_exist:
-                    # slice Merged Structure&Alignment DataFrame using anchor residue atmseq_id
-                    cdr_loop = merged_df[(merged_df.seqres_id > anchor_seqres_id_begin[0]) &
-                                         (merged_df.seqres_id < anchor_seqres_id_end[0])]["atmseq"].values
-                    # if "-" in `atmseq`, then set `cdr_containing_missing_residues[cdr]` to True
-                    if "-" in cdr_loop:
-                        cdr_containing_missing_residues[cdr] = True
-                        logger.error(f"{struct_id}: CDR {cdr} has missing residues.")
-                    else:
-                        cdr_containing_missing_residues[cdr] = False
-
-        return cdr_containing_missing_residues
-
+    df_aln_m.sort_values(by=["seqres_id"], ascending=True, inplace=True)
+    
     # check if any cdr loop has missing residues
-    result_H = cdr_has_missing_residues(merged_df=df_aln_H, chain="H")
-    result_L = cdr_has_missing_residues(merged_df=df_aln_L, chain="L")
+    result = _cdr_has_missing_residues(merged_df=df_aln_m, 
+                                       chain_type=chain_type,
+                                       anchor_res=ANCHOR_RES,
+                                       struct_id=struct_id)
 
     # print alignment if found missing residues
-    if True in result_H.values():
-        aln_str = print_format_alignment(alns=[str(i.seq) for i in H_aln],
-                                         ids=[f"{struct_id}_H_SEQERS", f"{struct_id}_H_ATMSEQ"],
+    if True in result.values():
+        aln_str = print_format_alignment(alns=[str(i.seq) for i in aln],
+                                         ids=[f"{struct_id}_{chain_label}_SEQERS", f"{struct_id}_{chain_label}_ATMSEQ"],
                                          return_fmt_aln_str=True)
-        logger.info(f"{struct_id}: Heavy chain alignment SEQRES vs. ATMSEQ:\n{aln_str}")
-
-    if True in result_L.values():
-        aln_str = print_format_alignment(alns=[str(i.seq) for i in L_aln],
-                                         ids=[f"{struct_id}_L_SEQERS", f"{struct_id}_L_ATMSEQ"],
-                                         return_fmt_aln_str=True)
-        logger.info(f"{struct_id}: Light chain alignment SEQRES vs. ATMSEQ:\n{aln_str}")
+        logger.info(f"{struct_id}: {chain_type=} {chain_label=} alignment SEQRES vs. ATMSEQ:\n{aln_str}")
 
     # check missing residues
-    if True in result_H.values() or True in result_L.values():
+    if True in result.values():
         return False
 
     return True
 
 
-def assert_cdr_no_big_b_factor(struct_fp: Path,
-                               b_factor_atoms: List[str],
-                               b_factor_thr: float,
-                               numbering_scheme: str,
-                               df_H: pd.DataFrame = None,
-                               df_L: pd.DataFrame = None,
-                               ) -> bool:
+def assert_cdr_no_big_b_factor_core(struct_fp: Path,
+                                    struct_df: pd.DataFrame,
+                                    b_factor_atoms: List[str],
+                                    b_factor_thr: float,
+                                    numbering_scheme: str,
+                                    ) -> bool:
     """
     Assert CDR loop specified atom set B factor is smaller than the thr by default 80.
     Args:
         struct_fp: (Path) path to abdb file
+        struct_df: (pd.DataFrame) Structure DataFrame for a chain 
         b_factor_thr: (float) default 80.0, specified atom B factor should < thr
         numbering_scheme: (str) cdr numbering scheme either `CHOTHIA` or `ABM`
         b_factor_atoms: (List[str]) List of atoms e.g. ["CA"]
-        df_H: (pd.DataFrame) heavy chain Structure DataFrame
-        df_L: (pd.DataFrame) light chain Structure DataFrame
 
     Returns:
         bool
     """
+    df = struct_df.copy()
     struct_id = struct_fp.stem
 
     # assert numbering scheme
@@ -569,24 +587,19 @@ def assert_cdr_no_big_b_factor(struct_fp: Path,
     except AssertionError:
         raise ValueError(f"Numbering scheme must be either `Chothia` or `AbM`. Provided: {numbering_scheme}")
 
-    # create H/L chain dataframe
-    if df_H is None or df_L is None:
-        df_H, df_L = gen_struct_cdr_df(struct_fp=struct_fp,
-                                       cdr_dict=CDR_HASH_REV[numbering_scheme],
-                                       retain_b_factor=True)
-
     # get cdr atoms
-    cdr_df = pd.concat([
-        # df_H[(df_H.cdr != "") & list(map(lambda x: x in b_factor_atoms, df_H.atom))],
-        # df_L[(df_L.cdr != "") & list(map(lambda x: x in b_factor_atoms, df_L.atom))]
-        df_H[(df_H.cdr != "") & (df_H.atom.isin(b_factor_atoms))],
-        df_L[(df_L.cdr != "") & (df_L.atom.isin(b_factor_atoms))]
-    ])
+    # cdr_df = pd.concat([
+    #     # df_H[(df_H.cdr != "") & list(map(lambda x: x in b_factor_atoms, df_H.atom))],
+    #     # df_L[(df_L.cdr != "") & list(map(lambda x: x in b_factor_atoms, df_L.atom))]
+    #     df_H[(df_H.cdr != "") & (df_H.atom.isin(b_factor_atoms))],
+    #     df_L[(df_L.cdr != "") & (df_L.atom.isin(b_factor_atoms))]
+    # ])
+    cdr_df = df.query('cdr != "" and atom in @b_factor_atoms')
 
-    questionable_atoms = cdr_df[(cdr_df.b_factor >= b_factor_thr) | (cdr_df.b_factor == 0.000)]
-    if questionable_atoms.shape[0] > 0:
+    bad_atoms = cdr_df[(cdr_df.b_factor >= b_factor_thr) | (cdr_df.b_factor == 0.000)]
+    if bad_atoms.shape[0] > 0:
         logger.error(f"{struct_id} questionable B factor atoms:\n"
-                     f"{questionable_atoms.to_string()}\n")
+                     f"{bad_atoms.to_string()}\n")
         return False
 
     return True
@@ -647,138 +660,3 @@ def assert_cdr_no_non_proline_cis_peptide(struct_fp: Path,
 
     return cdr_no_non_proline_cis_peptide
 
-
-if __name__ == "__main__":
-    config = {
-        "dataset": {
-            "ABDB": Path("/Users/chunan/Dataset/AbDb/abdb_newdata"),
-            "ABDB_resolution": Path("/Users/chunan/Dataset/AbDb/abdb_new_data.resolution"),
-        },
-        "input": {
-            "free_vs_complex_ab_list": Path(
-                "/Users/chunan/UCL/scripts/abag_interface_analysis/abyint/data/processed/free_vs_complex_ab.08July2022.csv"),
-        },
-        "executable": {
-            "clustal-omega": "/usr/local/bin/clustal-omega",
-        },
-        "numbering_scheme": "ABM",
-        "b_factor_atom_set": ["CA"],
-        "b_factor_cdr_thr": 80.,
-        "resolution_thr": 2.8
-    }
-
-    # ab_id = struct_id = "6jfi_1"  # resolution failed
-    ab_id = struct_id = "8fab_1"  # high torsion energy at H97 CDR-H3
-    logger.info(f"{ab_id}")
-    struct_fp = config["dataset"]["ABDB"].joinpath(f"pdb{struct_id}.mar")
-
-    # criteria
-    criteria = dict(
-        mar_struct_exist=False,
-        mar_struct_resolution=False,
-        mar_struct_not_empty=False,
-        struct_okay=False,
-        chain_length_okay=False,
-        cdr_no_missing_residue=False,
-        cdr_no_big_b_factor=False,
-        cdr_no_high_torsion_energy=False,
-        cdr_no_non_proline_cis_peptide=False,
-    )
-    if ab_id is None:
-        ab_id = struct_fp.stem
-
-    # assert mar file exists
-    criteria["mar_struct_exist"] = assert_struct_file_exist(struct_fp=struct_fp)
-    if not criteria["mar_struct_exist"]:
-        logger.error(f"{ab_id} mar file does not exist ... FAILED")
-
-    # check structure resolution
-    if criteria["mar_struct_exist"]:
-        criteria["mar_struct_resolution"] = assert_struct_resolution(struct_fp=struct_fp,
-                                                                     resolution_thr=config["resolution_thr"],
-                                                                     config=config)
-    if not criteria["mar_struct_resolution"]:
-        logger.error(f"{ab_id} resolution greater than {config['resolution_thr']} ... FAILED")
-
-    # assert not empty file
-    if criteria["mar_struct_exist"]:
-        criteria["mar_struct_not_empty"] = assert_non_empty_file(struct_fp=struct_fp)
-        if not criteria["mar_struct_not_empty"]:
-            logger.error(f"{ab_id} mar file is empty ... FAILED")
-
-    # assert mar structure is okay
-    if criteria["mar_struct_not_empty"] and criteria["mar_struct_resolution"]:
-        # get atmseq and seqres
-        atmseq, seqres = extract_atmseq_seqres(struct_fp=struct_fp)
-
-        # 1. check heavy and light chains
-        criteria["chain_okay"] = assert_HL_chains_exist(struct_fp=struct_fp, atmseq=atmseq)
-        if not criteria["chain_okay"]:
-            logger.error(f"{ab_id} chain ... FAILED")
-
-        # 2. check seqres vs atmseq length
-        if criteria["chain_okay"]:
-            criteria["chain_length_okay"] = assert_seqres_atmseq_length(struct_fp=struct_fp,
-                                                                        atmseq=atmseq,
-                                                                        seqres=seqres)
-            if not criteria["chain_length_okay"]:
-                logger.error(f"{ab_id} SEQRES vs ATMSEQ chain length ... FAILED")
-
-        # 3. check CDRs
-        # parse abdb file
-        df_H, df_L = gen_struct_cdr_df(struct_fp=struct_fp,
-                                       cdr_dict=CDR_HASH_REV[config["numbering_scheme"]],
-                                       concat=False,
-                                       retain_b_factor=True)
-        if criteria["chain_length_okay"]:
-            criteria["cdr_no_missing_residue"] = assert_cdr_no_missing_residues(
-                struct_fp=struct_fp,
-                clustal_omega_executable=config["executable"]["clustal-omega"],
-                numbering_scheme=config["numbering_scheme"],
-                atmseq=atmseq, seqres=seqres,
-                df_H=df_H, df_L=df_L
-            )
-            if not criteria["cdr_no_missing_residue"]:
-                logger.error(f"{ab_id} CDR ... FAILED")
-
-        # 4. check loop CA B-factor (filter out ≥ 80 & == 0.)
-        if criteria["cdr_no_missing_residue"]:
-            criteria["cdr_no_big_b_factor"] = assert_cdr_no_big_b_factor(
-                struct_fp=struct_fp,
-                b_factor_atoms=config["b_factor_atom_set"],
-                b_factor_thr=config["b_factor_cdr_thr"],
-                numbering_scheme=config["numbering_scheme"],
-                df_H=df_H, df_L=df_L
-            )
-            if not criteria["cdr_no_big_b_factor"]:
-                logger.error(f"{ab_id} Loop B factor ... FAILED")
-
-        # concat Heavy and Light chain to single Structure DataFrame
-        struct_df = pd.concat([df_H, df_L], axis=0, ignore_index=True)
-        struct_df["node_id"][df_H.shape[0]:] += df_H.node_id.max() + 1  # correct node_id
-
-        # 5. check torsion energy
-        if criteria["cdr_no_missing_residue"]:
-            criteria["cdr_no_high_torsion_energy"] = assert_cdr_no_high_torsion_energy(
-                struct_fp=struct_fp,
-                numbering_scheme=config["numbering_scheme"],
-                struct_df=struct_df
-            )
-            if not criteria["cdr_no_high_torsion_energy"]:
-                logger.warning(f"{ab_id} CDR torsion energy ... WARNING")
-
-        # 6. check non-Proline cis peptide i.e. -π/2 < ω < π/2
-        if criteria["cdr_no_missing_residue"]:
-            criteria["cdr_no_non_proline_cis_peptide"] = assert_cdr_no_non_proline_cis_peptide(
-                struct_fp=struct_fp,
-                numbering_scheme=config["numbering_scheme"],
-                struct_df=struct_df
-            )
-            if not criteria["cdr_no_non_proline_cis_peptide"]:
-                logger.warning(f"{ab_id} CDR exists non-proline cis peptide ... WARNING")
-
-        # Finally, if all passed, set struct_okay=True
-        if all((criteria["chain_okay"], criteria["mar_struct_resolution"],
-                criteria["chain_length_okay"], criteria["cdr_no_missing_residue"],
-                criteria["cdr_no_big_b_factor"])):
-            criteria["struct_okay"] = True

@@ -4,28 +4,29 @@ using classifiers trained on unbound CDR conformations.
 """
 # basic
 import re
-import sys 
 import json
 import gdown
 import shutil 
+import joblib
 import textwrap
 import argparse
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import List, Tuple, Dict, Union, Optional, Any
-from scipy.spatial.transform import Rotation
-
-import joblib
-import yaml
+from typing import List, Tuple, Dict, Optional, Any
 
 # custom packages 
-sys.path.append(Path(__file__).resolve().parents[1].as_posix())
 from cdrclass.examine_abdb_struct import (
-    extract_atmseq_seqres, gen_struct_cdr_df,
-    assert_HL_chains_exist, assert_cdr_no_missing_residues, assert_seqres_atmseq_length,
-    assert_non_empty_file, assert_struct_file_exist, assert_cdr_no_big_b_factor,
+    extract_atmseq_seqres, gen_struct_cdr_df, assert_HL_chains_exist, 
+    assert_non_empty_file, assert_struct_file_exist, 
+    assert_seqres_atmseq_length,
+    assert_cdr_no_missing_residues_core, 
+    assert_cdr_no_big_b_factor_core,
     assert_cdr_no_non_proline_cis_peptide
+)
+from cdrclass.geometry import (
+    extract_ca_atoms, extract_cb_atoms, cb_ri, 
+    superimpose_atoms, atom_wise_dist
 )
 from cdrclass.utils import calc_omega_set_residues, calc_phi_psi_set_residues
 from cdrclass.abdb import CDR_HASH_REV, extract_bb_atoms, parse_single_mar_file
@@ -61,6 +62,19 @@ def download_and_extract_classifier() -> None:
         shutil.unpack_archive(filename=o, extract_dir=BASE/'assets')
 
 # ==================== Function ====================
+def concat_chain_dfs(dfs: List[pd.DataFrame]) -> pd.DataFrame:
+    # iterate over dfs and add max node_id from previous df to the current df node_id
+    dfo = None 
+    for dfi in dfs: 
+        df = dfi.copy()
+        if dfo is None: 
+            dfo = dfi.copy()
+        else: 
+            df["node_id"] += dfo.node_id.max() + 1
+            dfo = pd.concat([dfo, df], axis=0, ignore_index=True)
+    return dfo
+
+
 def process_single_mar_file(
     struct_fp: Path, 
     abdbid: str = None, 
@@ -180,31 +194,38 @@ def process_single_mar_file(
             retain_b_factor=True,
             retain_hetatm=False,
             retain_water=False)
-        criteria["cdr_no_missing_residue"] = assert_cdr_no_missing_residues(
-            struct_fp=struct_fp,
-            clustal_omega_executable=clustal_omega_exe_fp,
-            numbering_scheme=numbering_scheme,
-            atmseq=atmseq, seqres=seqres,
-            df_H=df_H, df_L=df_L
-        )
+        criteria["cdr_no_missing_residue"] = all([
+            assert_cdr_no_missing_residues_core(struct_fp=struct_fp,
+                                                struct_df=d['df'],
+                                                chain_type=d['chain_type'],
+                                                chain_label=d['chain_label'],
+                                                atmseq=atmseq[d['chain_label']], 
+                                                seqres=seqres[d['chain_label']],
+                                                clustal_omega_executable=clustal_omega_exe_fp,
+                                                numbering_scheme=numbering_scheme)
+            for d in df_H + df_L
+        ])
         if not criteria["cdr_no_missing_residue"]:
             logger.warning(f"{abdbid} CDR ...")
 
         # 4. check loop CA B-factor (filter out ≥ 80 & == 0.)
         if criteria["cdr_no_missing_residue"]:
-            criteria["cdr_no_big_b_factor"] = assert_cdr_no_big_b_factor(
-                struct_fp=struct_fp,
-                b_factor_atoms=b_factor_atom_set,
-                b_factor_thr=b_factor_cdr_thr,
-                numbering_scheme=numbering_scheme,
-                df_H=df_H, df_L=df_L
+            criteria["cdr_no_big_b_factor"] = all([
+                assert_cdr_no_big_b_factor_core(struct_fp=struct_fp,
+                                                struct_df=d['df'],
+                                                b_factor_atoms=b_factor_atom_set,
+                                                b_factor_thr=b_factor_cdr_thr,
+                                                numbering_scheme=numbering_scheme)
+                for d in df_H + df_L]
             )
             if not criteria["cdr_no_big_b_factor"]:
                 logger.warning(f"{abdbid} Loop B factor ...")
 
-        # concat Heavy and Light chain to single Structure DataFrame
-        struct_df = pd.concat([df_H, df_L], axis=0, ignore_index=True)
-        struct_df["node_id"][df_H.shape[0]:] += df_H.node_id.max() + 1  # correct node_id
+        # struct_df = pd.concat([df_H, df_L], axis=0, ignore_index=True)
+        # struct_df["node_id"][df_H.shape[0]:] += df_H.node_id.max() + 1  # correct node_id
+        
+        # concat chains to a single Structure DataFrame
+        struct_df = concat_chain_dfs(dfs=[d['df'] for d in df_H + df_L])
 
         # 6. check non-Proline cis peptide i.e. -π/2 < ω < π/2
         # [x] [chunan]: only eliminate unbound abdb entries having non-proline cis-residues
@@ -224,7 +245,8 @@ def process_single_mar_file(
                 # If found non-proline cis-residue issue warning but still pass
                 criteria["cdr_no_non_proline_cis_peptide"] = True
                 if not cdr_no_non_proline_cis_peptide:
-                    logger.warning(f"{abdbid} (bound) CDR exists non-proline cis peptide.")
+                    logger.warning(f"{abdbid} (bound) CDR exists non-proline cis peptide, but still pass ...")
+                    criteria['metadata'] = {'cdr non proline cis peptide': 'found but still pass'}
             # report
             if not criteria["cdr_no_non_proline_cis_peptide"]:
                 logger.warning(f"{abdbid} (unbound) CDR exists non-proline cis peptide ...")
@@ -269,6 +291,24 @@ def read_cdr_bb_csv(fp: Path=None, df: pd.DataFrame=None, add_residue_identifier
 
 
 def extract_phi_psi_omega(struct_df: pd.DataFrame, add_residue_identifier: bool = True) -> pd.DataFrame:
+    """
+    Extract phi, psi, omega angles from a structure dataframe
+
+    Args:
+        struct_df (pd.DataFrame): structure dataframe
+        add_residue_identifier (bool, optional): add residue identifier using chain_label, residue_number, insertion. Defaults to True.
+        --------------------------
+        name           | col name 
+        --------------------------
+        chain_label    | chain
+        residue_number | resi 
+        insertion      | alt
+        --------------------------
+
+    Returns:
+        pd.DataFrame: _description_
+    """
+    assert 'cdr' in struct_df.columns
     # CDR node_id list
     cdr_nodes: List[int] = struct_df[struct_df.cdr != ""].node_id.drop_duplicates().to_list()
 
@@ -337,92 +377,6 @@ def convert_one_loop_dihedral_to_trigonometric_array(
     return loop_repr
 
 
-# ---------------------------------------------
-# func required for 
-# `merge_in_torsional` and `merge_in_cartesian`
-# ---------------------------------------------
-# find CB residue identifiers
-def cb_ri(df: pd.DataFrame, cdr: str) -> List[str]:
-    """
-    Args:
-        df: (pd.DataFrame) CDR loop structure dataframe
-        cdr: (str) CDR identifier either "L1", "L2", "L3", "H1", "H2", "H3"
-
-    Returns:
-        ri_list: (List[str]) List of residue identifiers with CB atom present e.g. ['L50']
-    """
-    assert "ri" in df.columns
-    ri_list = df[(df.cdr == cdr) & (df.atom == "CB")]["ri"].drop_duplicates().to_list()
-
-    return ri_list
-
-
-# extract non-GLY position CB atom coordinates
-def extract_cb_atoms(df: pd.DataFrame, cdr: str, ri_list: List[str]) -> np.ndarray:
-    """
-    Extract CB atom coordinates from a structure dataframe, excluding glycine residues specified in `gly_ri_list`
-
-    Args:
-        df: (pd.DataFrame) CDR loop structure dataframe: (pd.DataFrame)
-        gly_ri_list: (List[str]) A list of residue identifiers for Glycines found in the structure DataFrame
-
-    Returns:
-        cb_coord: (np.ndarray) CB atom coordinates
-    """
-    assert "ri" in df.columns
-
-    return df[(df.cdr == cdr) & (df.atom == "CB") & (df.ri.isin(ri_list))][["x", "y", "z"]].to_numpy()
-
-
-# extract non-GLY position CB atom coordinates
-def extract_ca_atoms(df: pd.DataFrame, cdr: str) -> np.ndarray:
-    """
-    Extract CA atom coordinates from a structure dataframe
-
-    Args:
-        df: (pd.DataFrame) CDR loop structure dataframe: (pd.DataFrame)
-
-    Returns:
-        ca_coord: (np.ndarray) CA atom coordinates
-    """
-    assert "ri" in df.columns
-
-    return df[(df.cdr == cdr) & (df.atom == "CA")][["x", "y", "z"]].to_numpy()
-
-
-# superimpose 2 sets of atoms
-def superimpose_atoms(ref: np.ndarray, mob: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-
-    Args:
-        ref: (np.ndarray) shape [N, 3] xyz coordinates of a set of atoms
-        mob: (np.ndarray) shape [N, 3] xyz coordinates of a set of atoms
-
-    Returns:
-        rot_b2a: (np.ndarray) shape [3, 3] best estimate of the rotation that transforms b to a.
-        rmsd: (float) Root-Mean-Square Deviation after fitting
-    """
-    # assert both sets of points have the same shape
-    assert ref.shape == mob.shape
-    n_res = ref.shape[0]
-
-    # translation: center both sets to the origin
-    ref_trans = ref - ref.mean(axis=0)
-    mob_trans = mob - mob.mean(axis=0)
-
-    # calculate rotation matrix
-    rot_b2a, rmsd = Rotation.align_vectors(a=ref_trans, b=mob_trans)
-    rot_b2a = rot_b2a.as_matrix()  # to matrix 3 x 3
-    rmsd /= np.sqrt(n_res)  # RMSD correction, loss function did not divided by num of atoms
-
-    return rot_b2a, rmsd
-
-
-def atom_wise_dist(xyz_a: np.ndarray, xyz_b: np.ndarray):
-    """ Calculate atom-wise distance between 2 sets of atoms """
-    return np.linalg.norm(xyz_a - xyz_b, axis=1, ord=2)
-
-
 # --------------------
 # merge in torsion 
 # and cartesian
@@ -459,13 +413,13 @@ def merge_in_cartesian(bb_df_a: pd.DataFrame, bb_df_b: pd.DataFrame, cdr: str, v
         bool: whether a pair of clusters should be merged
     """
     # extract CA atoms
-    xyz_a_ca = extract_ca_atoms(df=bb_df_a, cdr=cdr)
-    xyz_b_ca = extract_ca_atoms(df=bb_df_b, cdr=cdr)
+    xyz_a_ca = extract_ca_atoms(struct_df=bb_df_a, cdr=cdr)
+    xyz_b_ca = extract_ca_atoms(struct_df=bb_df_b, cdr=cdr)
 
     # extract CB atoms
-    ri_list = list(set(cb_ri(df=bb_df_a, cdr=cdr)).intersection(set(cb_ri(df=bb_df_b, cdr=cdr))))
-    xyz_a_cb = extract_cb_atoms(df=bb_df_a, cdr=cdr, ri_list=ri_list)
-    xyz_b_cb = extract_cb_atoms(df=bb_df_b, cdr=cdr, ri_list=ri_list)
+    ri_list = list(set(cb_ri(struct_df=bb_df_a, cdr=cdr)).intersection(set(cb_ri(struct_df=bb_df_b, cdr=cdr))))
+    xyz_a_cb = extract_cb_atoms(struct_df=bb_df_a, cdr=cdr, ri_list=ri_list)
+    xyz_b_cb = extract_cb_atoms(struct_df=bb_df_b, cdr=cdr, ri_list=ri_list)
 
     # translation vector
     translation_a = xyz_a_ca.mean(axis=0)
@@ -561,6 +515,7 @@ def fetch_lrc_ap_can(lrc_ap_cluster: Dict[str, Any], lrc_name: str, ap_clu_idx: 
 # --------------------
 def process_cdr(
     cdr: str, 
+    chain_label: str,
     abdb_dir: Path,
     dihedral_df: pd.DataFrame, 
     bb_df: pd.DataFrame,
@@ -571,9 +526,11 @@ def process_cdr(
     # ----------------------------------------
     # prepare processing for each CDR type 
     # ----------------------------------------
-    # extract column cdr == `cdr`
-    dihedral_df = dihedral_df[dihedral_df.cdr == cdr].copy()
-    bb_df = bb_df[bb_df.cdr == cdr].copy()
+    # # extract column cdr == `cdr`
+    # dihedral_df = dihedral_df[dihedral_df.cdr == cdr].copy()
+    # bb_df = bb_df[bb_df.cdr == cdr].copy()
+    dihedral_df = dihedral_df.query('cdr==@cdr and chain==@chain_label').reset_index(drop=True)
+    bb_df = bb_df.query('cdr==@cdr and chain==@chain_label').reset_index(drop=True)
 
     # load classifiers of the same CDR type and CDR length e.g. H1-12
     cdr_len = dihedral_df.shape[0]
@@ -597,7 +554,7 @@ def process_cdr(
                         "residue    cdr    aa     omega(degree)\n"
         for (ri, aa, omega) in non_pro_cis_res[["ri", "resn", "omega"]].values:
             report_str += f"{ri:>7}  {cdr:>5}  {aa:>4}  {omega:>17.2f}\n"
-        logger.warning(f"Found following non-proline cis-residues in Bound structure:\n"
+        logger.warning(f"Found following non-proline cis-residues in the structure:\n"
                         f"{report_str}")
 
     # ===== 2. Found closest AP cluster =====
@@ -721,8 +678,6 @@ def process_cdr(
 
     logger.info(report_str)
 
-
-
     return {
         # closest AP/CAN cluster summary (CAN: canonical, AP: Affinity Propagation)
         "closest_lrc": closest_clf,                                # LRC group         (str) e.g. "H1-10-allT"
@@ -741,12 +696,13 @@ def process_cdr(
         "merged": merged,
     }
 
+
 def worker(
     abdbid: str, 
     cdr: str = None, 
     abdb_dir: Path = None, 
     classifier_dir: Path = None, 
-    lrc_ap_cluster: Dict[str, Any] = None) -> Dict[str, Any] | List[Dict[str, Any]]:
+    lrc_ap_cluster: Dict[str, Any] = None) -> List[Dict[str, Any]]:
     """
     The core function that compare the input AbDb antibody with pre-calculated 
     Length and Residue Configuration (LRC) Affinity Propagation (AP) clusters
@@ -783,48 +739,45 @@ def worker(
     dihedral_df = extract_phi_psi_omega(struct_df=struct_df)
     bb_df = extract_bb_atoms(struct_df=struct_df, add_residue_identifier=True)
     
+    # create a dictionary mapping CDR type to chain labels, in case of double-heavy and double-light antibodies
+    mapping = dihedral_df[['chain', 'cdr']].drop_duplicates().groupby('cdr')['chain'].apply(list).to_dict()
     # ----------------------------------------
-    # Output Type I: single CDR
+    # Specified CDRs 
     # ----------------------------------------
     if cdr != "all":
-        logger.info(textwrap.dedent(f"""
-            ------------------------------
-            Processing {abdbid}, CDR-{cdr}
-            ------------------------------
-        """))
-        return process_cdr(
-            cdr=cdr,
-            abdb_dir=abdb_dir,
-            dihedral_df=dihedral_df,
-            bb_df=bb_df,
-            abdbid=abdbid,
-            classifier_dir=classifier_dir,
-            lrc_ap_cluster=lrc_ap_cluster
-        )
+        # modify mapping to only include the specified CDR type
+        try:
+            assert cdr in mapping.keys()
+            mapping = {cdr: mapping[cdr]}
+        except AssertionError:
+            logger.error(f"CDR {cdr} not found in {abdbid}.")
+            logger.warning("Continue with other CDRs ...")
     
     # ----------------------------------------
-    # Output Type II: all CDRs
+    # Iterate over all CDR types
     # ----------------------------------------
     results = []
-    for cdr in ["H1", "H2", "H3", "L1", "L2", "L3"]:
-        logger.info(textwrap.dedent(f"""
-            ------------------------------
-            Processing {abdbid}, CDR-{cdr}
-            ------------------------------
-        """))
-        results.append( {
-            cdr: process_cdr(
-                cdr=cdr,
-                abdb_dir=abdb_dir,
-                dihedral_df=dihedral_df,
-                bb_df=bb_df,
-                abdbid=abdbid,
-                classifier_dir=classifier_dir,
-                lrc_ap_cluster=lrc_ap_cluster
-            )
-        })
-        logger.info(f"Processing {abdbid}, CDR-{cdr} Done.")
-        print("\n\n\n")
+    for cdr, chain_labels in mapping.items():
+        for chain_label in chain_labels:
+            logger.info(textwrap.dedent(f"""
+                --------------------------------------------------------------
+                Processing {abdbid}, CDR: {cdr}, chain_label: {chain_label}
+                --------------------------------------------------------------
+            """))
+            results.append({'chain_type': cdr[0],
+                            'chain_label': chain_label,
+                            'cdr': cdr,
+                            'result': process_cdr(cdr=cdr,
+                                                  chain_label=chain_label,
+                                                  abdb_dir=abdb_dir,
+                                                  dihedral_df=dihedral_df,
+                                                  bb_df=bb_df,
+                                                  abdbid=abdbid,
+                                                  classifier_dir=classifier_dir,
+                                                  lrc_ap_cluster=lrc_ap_cluster)
+                    })
+            logger.info(f"Processing {abdbid}, CDR-{cdr} Done.")
+            print("\n\n\n")
     return results
 
 # --------------------
@@ -875,9 +828,14 @@ def cli() -> argparse.Namespace:  # sourcery skip: inline-immediately-returned-v
     
     return args
 
+
 def main(args) -> None:
-    args = cli()
-    abdb_dir: Path           = args.abdb
+    if is_first_run():
+        # first run
+        logger.info("First run, downloading assets ...")
+        download_and_extract_classifier()
+    
+    abdb_dir: Path       = args.abdb
     classifier_dir: Path = args.lrc_ap_clusters
     lrc_ap_fp: Path      = args.lrc_ap_info
     outdir: Path         = args.outdir
@@ -893,7 +851,7 @@ def main(args) -> None:
     
     # block: run the worker 
     # ------------------------------------------------------------------------------
-    results: Dict[str, Any] | List[Dict[str, Any]] = worker(
+    results: List[Dict[str, Any]] = worker(
         abdbid=abdbid, 
         cdr=cdr, 
         abdb_dir=abdb_dir, 
@@ -904,18 +862,20 @@ def main(args) -> None:
     
     # save results
     o = (outdir / f"{abdbid}.json").resolve()
+    results.append({'job': {'abdbid': abdbid, 
+                            'cdr': cdr,
+                            'abdb_dir': str(abdb_dir),
+                            'classifier_dir': str(classifier_dir),
+                            'lrc_ap_fp': str(lrc_ap_fp)}})
     with open(o, "w") as f:
         json.dump(results, f, indent=4)
     logger.info(f"Results saved to {o}")
 
+
 def app() -> None: 
-    if is_first_run():
-        # first run
-        logger.info("First run, downloading assets ...")
-        download_and_extract_classifier()
-        
     args = cli() 
     main(args=args)
+
 
 # ==================== Main ====================
 if __name__ == "__main__":

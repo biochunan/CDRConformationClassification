@@ -145,6 +145,7 @@ def parse_single_mar_file(
 
 
 def extract_bb_atoms(struct_df: pd.DataFrame, include_CB: bool = True, add_residue_identifier: bool = True) -> pd.DataFrame:
+    assert 'cdr' in struct_df.columns
     # atom set
     ATOMS = ["N", "CA", "C", "O"]
     if include_CB:
