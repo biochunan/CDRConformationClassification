@@ -6,6 +6,7 @@ using classifiers trained on unbound CDR conformations.
 import re
 import sys 
 import json
+import gdown
 import shutil 
 import textwrap
 import argparse
@@ -41,7 +42,23 @@ logger.configure(
 
 # ==================== Constants ====================
 CLUSTALO = shutil.which("clustalo")
-BASE = Path(__file__).resolve().parents[1]  # CDRConformationClassification
+BASE = Path(__file__).resolve().parent  # cdrclass/
+ASSETS_URL = 'https://drive.google.com/uc?id=1kERH5wYVMhCvmAlDPL835Ms4ZhxL0pQQ'
+ABDB=None
+
+# ==================== Installation ====================
+def is_first_run() -> bool:
+    return not BASE.joinpath("assets", "classifier").exists()
+
+def download_and_extract_classifier() -> None:
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # download classifier
+        o = Path(tmpdir).joinpath('assets.tar.gz').as_posix()
+        gdown.download(ASSETS_URL, output=o, quiet=False)
+        # extract classifier
+        (BASE/'assets').mkdir(exist_ok=True, parents=True)
+        shutil.unpack_archive(filename=o, extract_dir=BASE/'assets')
 
 # ==================== Function ====================
 def process_single_mar_file(
@@ -244,7 +261,7 @@ def read_cdr_bb_csv(fp: Path=None, df: pd.DataFrame=None, add_residue_identifier
 
     # add residue identifier if True
     if add_residue_identifier:
-        # create reisdue identifier
+        # create residue identifier
         ri_list = [f"{c}{r}{a}" for (c, r, a) in df[["chain", "resi", "alt"]].values]
         df["ri"] = ri_list
 
@@ -275,7 +292,7 @@ def extract_phi_psi_omega(struct_df: pd.DataFrame, add_residue_identifier: bool 
     
     # add residue identifier if True
     if add_residue_identifier:
-        # create reisdue identifier
+        # create residue identifier
         ri_list = [f"{c}{r}{a}" for (c, r, a) in cdr_df[["chain", "resi", "alt"]].values]
         cdr_df["ri"] = ri_list
 
@@ -346,7 +363,7 @@ def extract_cb_atoms(df: pd.DataFrame, cdr: str, ri_list: List[str]) -> np.ndarr
     Extract CB atom coordinates from a structure dataframe, excluding glycine residues specified in `gly_ri_list`
 
     Args:
-        df: (pd.DataFrame) CDR loop structure dataframedf: (pd.DataFrame)
+        df: (pd.DataFrame) CDR loop structure dataframe: (pd.DataFrame)
         gly_ri_list: (List[str]) A list of residue identifiers for Glycines found in the structure DataFrame
 
     Returns:
@@ -363,7 +380,7 @@ def extract_ca_atoms(df: pd.DataFrame, cdr: str) -> np.ndarray:
     Extract CA atom coordinates from a structure dataframe
 
     Args:
-        df: (pd.DataFrame) CDR loop structure dataframedf: (pd.DataFrame)
+        df: (pd.DataFrame) CDR loop structure dataframe: (pd.DataFrame)
 
     Returns:
         ca_coord: (np.ndarray) CA atom coordinates
@@ -544,6 +561,7 @@ def fetch_lrc_ap_can(lrc_ap_cluster: Dict[str, Any], lrc_name: str, ap_clu_idx: 
 # --------------------
 def process_cdr(
     cdr: str, 
+    abdb_dir: Path,
     dihedral_df: pd.DataFrame, 
     bb_df: pd.DataFrame,
     abdbid: str,
@@ -655,7 +673,7 @@ def process_cdr(
             exemplar_id = ap['ap_clu_cen_abdbid']
             # exemplar bb_df
             exemplar_bb_df = read_cdr_bb_csv(
-                df=extract_bb_atoms(struct_df=parse_single_mar_file(ABDB.joinpath(f"pdb{exemplar_id}.mar"))),
+                df=extract_bb_atoms(struct_df=parse_single_mar_file(abdb_dir.joinpath(f"pdb{exemplar_id}.mar"))),
                 add_residue_identifier=True
             )
             if merge_with_any_exemplar_in_cartesian := merge_in_cartesian(
@@ -776,6 +794,7 @@ def worker(
         """))
         return process_cdr(
             cdr=cdr,
+            abdb_dir=abdb_dir,
             dihedral_df=dihedral_df,
             bb_df=bb_df,
             abdbid=abdbid,
@@ -796,6 +815,7 @@ def worker(
         results.append( {
             cdr: process_cdr(
                 cdr=cdr,
+                abdb_dir=abdb_dir,
                 dihedral_df=dihedral_df,
                 bb_df=bb_df,
                 abdbid=abdbid,
@@ -836,13 +856,13 @@ def cli() -> argparse.Namespace:  # sourcery skip: inline-immediately-returned-v
     parser.add_argument('-o', '--outdir', type=Path, default=Path.cwd()/'output', 
                         help="results directory")
     # abdb 
-    parser.add_argument('-db', "--abdb", type=Path, default=BASE/'dirs'/'ABDB', 
+    parser.add_argument('-db', "--abdb", type=Path, default=BASE/'assets'/'ABDB', 
                         help="AbDb directory (version: 20220926)")
     # precalculated Length and Residue Configuration (LRC) Affinity Propagation (AP) clusters  
-    parser.add_argument('-clu', '--lrc_ap_clusters', type=Path, default=BASE/'dirs'/'classifier', 
+    parser.add_argument('-clu', '--lrc_ap_clusters', type=Path, default=BASE/'assets'/'classifier', 
                         help="Length and Residue Configuration (LRC) Affinity Propagation (AP) classifier directory")
     # LRC AP cluster associated info file  
-    parser.add_argument('-f', '--lrc_ap_info', type=Path, default=BASE/'dirs'/'LRC_AP_cluster.json', 
+    parser.add_argument('-f', '--lrc_ap_info', type=Path, default=BASE/'assets'/'LRC_AP_cluster.json', 
                         help="LRC_AP_cluster.json file path that holds information about each precalculated LRC AP cluster")
     
     # parse args
@@ -850,14 +870,14 @@ def cli() -> argparse.Namespace:  # sourcery skip: inline-immediately-returned-v
     
     # validate abdb, classifier, LRC_AP_fp
     assert args.abdb.exists(), f"{args.abdb} does not exist."
-    assert args.lrc_ap_clusters.exists(), f"{args.classifier} does not exist."
-    assert args.lrc_ap_info.exists(), f"{args.LRC_AP_fp} does not exist."
+    assert args.lrc_ap_clusters.exists(), f"{args.lrc_ap_clusters} does not exist."
+    assert args.lrc_ap_info.exists(), f"{args.lrc_ap_info} does not exist."
     
     return args
 
 def main(args) -> None:
     args = cli()
-    ABDB: Path           = args.abdb
+    abdb_dir: Path           = args.abdb
     classifier_dir: Path = args.lrc_ap_clusters
     lrc_ap_fp: Path      = args.lrc_ap_info
     outdir: Path         = args.outdir
@@ -876,7 +896,7 @@ def main(args) -> None:
     results: Dict[str, Any] | List[Dict[str, Any]] = worker(
         abdbid=abdbid, 
         cdr=cdr, 
-        abdb_dir=ABDB, 
+        abdb_dir=abdb_dir, 
         classifier_dir=classifier_dir, 
         lrc_ap_cluster=LRC_AP_CLUSTER
     )
@@ -889,6 +909,11 @@ def main(args) -> None:
     logger.info(f"Results saved to {o}")
 
 def app() -> None: 
+    if is_first_run():
+        # first run
+        logger.info("First run, downloading assets ...")
+        download_and_extract_classifier()
+        
     args = cli() 
     main(args=args)
 
