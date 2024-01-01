@@ -18,6 +18,7 @@ setup(
         "rich",
         "loguru",
         "tqdm",
+        'gdown'
     ],
     # add console script
     entry_points={
