@@ -33,7 +33,27 @@ $ cd ./dirs
 $ ln -s /path/to/ABDB ./ABDB
 ```
 
+## Installation
+```bash 
+$ pip install git+https://github.com/biochunan/CDRConformationClassification.git
+```
+
+This will install a command line tool `cdrclu` for CDR conformation classification, see [Usage](#usage) for details.
+
+
 ## Usage
+
+### From command line
+
+```bash
+$ cdrclu --cdr all \
+    --outdir path/to/folder/output \
+    --abdb path/to/folder/AbDb/ \
+    1ikf_0P
+```
+
+### From source 
+
 Create a python 3.9 environment and install dependencies
 ```bash 
 # create an environment named cdrclass
@@ -42,18 +62,21 @@ $ conda activate cdrclass
 
 # install dependencies
 $ cd /path/to/CDRConformationClassification
-$ pip install .  
+$ pip install -e .  
 ```
 
 Run classification on a single AbDb structure, for example `1ikf_0P`
-```bash
+```shell
 $ python classify_general_abdb_entry.py \
     --cdr all \
-    --outdir ./results \
-    --config ./config/classify_general_abdb_entry.yaml \
+    --outdir path/to/folder/output \
+    --abdb path/to/folder/AbDb \
     1ikf_0P
 ```
+Or use the command line tool `cdrclu` (see above)
+
 This outputs a JSON file in `./results` directory, the file name is `1ikf_0P.json`, it has the following content: 
+
 ```JSON
 [
     {
