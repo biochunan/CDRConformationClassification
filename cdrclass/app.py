@@ -202,19 +202,25 @@ def process_single_mar_file(
             retain_b_factor=True,
             retain_hetatm=False,
             retain_water=False)
-        criteria["cdr_no_missing_residue"] = all(
-            assert_no_cdr_missing_residues(struct_fp=struct_fp,
-                                           struct_df=d['df'],
-                                           chain_type=d['chain_type'],
-                                           chain_label=d['chain_label'],
-                                           atmseq=atmseq[d['chain_label']],
-                                           seqres=seqres[d['chain_label']],
-                                           clustal_omega_executable=clustal_omega_exe_fp,
-                                           numbering_scheme=numbering_scheme)
-            for d in df_H + df_L
-        )
-        if not criteria["cdr_no_missing_residue"]:
-            logger.warning(f"{abdbid} CDR ...")
+        
+        criteria["cdr_no_missing_residue"] = True
+        for d in df_H + df_L:
+            b, details = assert_no_cdr_missing_residues(struct_fp=struct_fp,
+                                                        struct_df=d['df'],
+                                                        chain_type=d['chain_type'],
+                                                        chain_label=d['chain_label'],
+                                                        atmseq=atmseq[d['chain_label']], 
+                                                        seqres=seqres[d['chain_label']],
+                                                        clustal_omega_executable=clustal_omega_exe_fp,
+                                                        numbering_scheme=numbering_scheme)
+            metadata['cdr_missing_residue'][d['chain_label']] = {'pass': b, 'cdr_has_missing_residue (T->missing; F->no missing)': details}
+            criteria["cdr_no_missing_residue"] = criteria["cdr_no_missing_residue"] and b
+            if not b: 
+                # report details 
+                logger.warning(f"{abdbid} chain_label={d['chain_label']}, chain_type={d['chain_type']} has missing residues ...")
+                for k, v in details.items():
+                    s = 'has missing residues' if v else 'no missing residues'
+                    logger.warning(f"{abdbid} {k}: {s}")
 
         # 4. check loop CA B-factor (filter out ≥ 80 & == 0.)
         if criteria["cdr_no_missing_residue"]:
@@ -233,7 +239,7 @@ def process_single_mar_file(
         struct_df = concat_chain_dfs(dfs=[d['df'] for d in df_H + df_L])
 
         # 6. check non-Proline cis peptide i.e. -π/2 < ω < π/2
-        # [x] [chunan]: only eliminate unbound abdb entries having non-proline cis-residues
+        # NOTE: this only eliminate UNBOUND abdb entries having non-proline cis-residues
         if criteria["cdr_no_missing_residue"]:
             # criteria["cdr_no_non_proline_cis_peptide"] = assert_cdr_no_non_proline_cis_peptide(
             cdr_no_non_proline_cis_peptide = assert_cdr_no_non_proline_cis_peptide(
@@ -262,7 +268,7 @@ def process_single_mar_file(
                 criteria["cdr_no_big_b_factor"], criteria["cdr_no_non_proline_cis_peptide"])):
             criteria["struct_okay"] = True
 
-    return criteria, struct_df
+    return criteria, struct_df, metadata
 
 # read cdr backbone atom coordinate csv
 def read_cdr_bb_csv(fp: Path=None, df: pd.DataFrame=None, add_residue_identifier: bool = False) -> pd.DataFrame:
@@ -586,7 +592,7 @@ def process_cdr(
         assert clf_fps
     except AssertionError as e:
         raise ClassifierNotExistError(f"Cannot find classifier for {cdr=} and {cdr_len=}") from e
-
+    
     clfs = {
         fp.name.split("-FreeAb")[0]: joblib.load(filename=fp)
         for fp in clf_fps 
@@ -761,7 +767,7 @@ def worker(
     cdr: str = None, 
     abdb_dir: Path = None, 
     classifier_dir: Path = None, 
-    lrc_ap_cluster: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    lrc_ap_cluster: Dict[str, Any] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     The core function that compare the input AbDb antibody with pre-calculated 
     Length and Residue Configuration (LRC) Affinity Propagation (AP) clusters
@@ -784,13 +790,13 @@ def worker(
     # ----------------------------------------
     # parse and validate the struct
     # ----------------------------------------
-    criteria, struct_df = process_single_mar_file(
+    criteria, struct_df, metadata = process_single_mar_file(
         struct_fp=abdb_dir.joinpath(f"pdb{abdbid}.mar"),
         abdbid=abdbid,
         strict=False,
     )
     if not criteria["cdr_no_missing_residue"]:
-        logger.warning(f"{abdbid} CDR has missing residue(s).")
+        logger.warning(f"{abdbid} {cdr=} has missing residue(s).")
 
     # ----------------------------------------
     # extract dihedrals and backbone atoms
@@ -838,7 +844,7 @@ def worker(
                     })
             logger.info(f"Processing {abdbid}, CDR-{cdr} Done.")
             print("\n\n\n")
-    return results
+    return results, metadata
 
 # --------------------
 # Main
@@ -917,7 +923,7 @@ def main(args) -> None:
     
     # block: run the worker 
     # ------------------------------------------------------------------------------
-    results: List[Dict[str, Any]] = worker(
+    results, metadata = worker(
         abdbid=abdbid, 
         cdr=cdr, 
         abdb_dir=abdb_dir, 
@@ -928,6 +934,7 @@ def main(args) -> None:
     
     # save results
     o = (outdir / f"{abdbid}.json").resolve()
+    results.append({'checkpoints': metadata})
     results.append({'job': {'abdbid': abdbid, 
                             'cdr': cdr,
                             'abdb_dir': str(abdb_dir),
