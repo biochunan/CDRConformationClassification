@@ -150,7 +150,7 @@ def gen_struct_cdr_df(struct_fp: Path,
     # use default kwargs if not specified
     retain_hetatm = kwargs.get("retain_hetatm", False)
     retain_water = kwargs.get("retain_water", False)
-    retain_b_factor = kwargs.get("retain_b_factor", False)
+    retain_b_factor = kwargs.get("retain_b_factor", True)
 
     # vars
     pdbid, pdbfp = struct_fp.stem, struct_fp.as_posix()
@@ -182,10 +182,11 @@ def gen_struct_cdr_df(struct_fp: Path,
     if concat: 
         # iterate over df_H and df_L, and add the max node_id of previous df to the current df
         dfs = []
-        for df in df_H + df_L:
+        for d in df_H + df_L:
+            df = d['df']
             df["node_id"] += dfs[-1]["node_id"].max() + 1 if len(dfs) > 0 else 0
             dfs.append(df.copy())
-        return pd.concat(dfs, axis=0)
+        return pd.concat(dfs, axis=0, ignore_index=True)
 
     return df_H, df_L
 
@@ -239,6 +240,7 @@ def assert_struct_resolution(struct_fp: Path, resolution_thr: float, config: Dic
 
 
 def assert_non_empty_file(struct_fp: Path) -> bool:
+    """ In the past, we encountered some empty AbDb files """
     struct_id = struct_fp.stem
     try:
         parser = PDBParser(QUIET=True)
@@ -270,6 +272,17 @@ def assert_H_L_chains(seq_dict: Dict[str, str], seq_type: str):
     return chains_exist, missing_chains
 
 
+def assert_chain_type_exist(struct_fp: Path, chain_type: str) -> bool:
+    parser = PDBParser(QUIET=True)
+    struct = parser.get_structure(struct_fp.stem, struct_fp)
+    chain_labels = [c.id for c in unfold_entities(struct, "C")]
+    try:
+        assert chain_type in map(str.upper, chain_labels)
+    except AssertionError:
+        logger.error(f"{struct_fp.stem} {chain_type=} does not exist ... FAILED")
+        return False
+
+
 def assert_HL_chains_exist(struct_fp: Path,
                            atmseq: Optional[Dict[str, str]] = None) -> bool:
     """
@@ -278,7 +291,7 @@ def assert_HL_chains_exist(struct_fp: Path,
 
     Args:
         struct_fp: (Path) path to structure file
-        atmseq: (Dict) key: cahin ids; val: string sequence, default None.
+        atmseq: (Dict) key: chain ids; val: string sequence, default None.
             see example below
 
     e.g. input `atmseq`
@@ -315,7 +328,7 @@ def assert_seqres_atmseq_length(struct_fp: Path,
 
     Args:
         struct_fp: (Path) path to structure file
-        atmseq: (Dict) key: cahin ids; val: string sequence, default None.
+        atmseq: (Dict) key: chain ids; val: string sequence, default None.
         seqres: (Dict) key: chain ids; val: string sequence, default None.
             see example below
 
@@ -338,17 +351,15 @@ def assert_seqres_atmseq_length(struct_fp: Path,
 
     # check if seqres is >= atmseq
     chain_length_okay = True
-    if len(seqres["H"]) < len(atmseq["H"]):
-        logger.error(f"{struct_id} Heavy chain length SEQRES < ATMSEQ ... FAILED\n"
-                     f"seqres: {seqres['H']}\n"
-                     f"atmseq: {atmseq['H']}")
-        chain_length_okay = False
-    if len(seqres["L"]) < len(atmseq["L"]):
-        logger.error(f"{struct_id} Light chain length SEQRES < ATMSEQ ... FAILED\n"
-                     f"seqres: {seqres['L']}\n"
-                     f"atmseq: {atmseq['L']}")
-        chain_length_okay = False
-
+    for cid, seq in seqres.items():
+        try:
+            assert len(seq) >= len(atmseq[cid])
+        except AssertionError:
+            logger.error(f"{struct_id} {cid=} seqres length < atmseq length ... FAILED")
+            logger.error(f"seqres: {seq}")
+            logger.error(f"atmseq: {atmseq[cid]}")
+            chain_length_okay = False
+    
     return chain_length_okay
 
 
@@ -514,7 +525,7 @@ def assert_cdr_no_missing_residues_core(struct_fp: Path,
     # DF 1: Structure DataFrame containing info about (1) CDR labels; (2) node id.
     df = df.drop_duplicates("node_id", ignore_index=True)
 
-    # DF 2: convert alignment string (SEQERS vs. ATMSEQ) to DataFrame => Alignment DataFrame
+    # DF 2: convert alignment string (SEQRES vs. ATMSEQ) to DataFrame => Alignment DataFrame
     df_aln = pd.DataFrame(dict(seqres_id=_gen_seq_id(aln[0].seq),
                                     atmseq_id=_gen_seq_id(aln[1].seq),
                                     seqres=list(aln[0].seq),
@@ -548,7 +559,7 @@ def assert_cdr_no_missing_residues_core(struct_fp: Path,
     # print alignment if found missing residues
     if True in result.values():
         aln_str = print_format_alignment(alns=[str(i.seq) for i in aln],
-                                         ids=[f"{struct_id}_{chain_label}_SEQERS", f"{struct_id}_{chain_label}_ATMSEQ"],
+                                         ids=[f"{struct_id}_{chain_label}_SEQRES", f"{struct_id}_{chain_label}_ATMSEQ"],
                                          return_fmt_aln_str=True)
         logger.info(f"{struct_id}: {chain_type=} {chain_label=} alignment SEQRES vs. ATMSEQ:\n{aln_str}")
 
