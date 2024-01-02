@@ -17,10 +17,13 @@ from typing import List, Tuple, Dict, Optional, Any
 
 # custom packages 
 from cdrclass.examine_abdb_struct import (
-    extract_atmseq_seqres, gen_struct_cdr_df, assert_HL_chains_exist, 
-    assert_non_empty_file, assert_struct_file_exist, 
+    extract_atmseq_seqres, 
+    gen_struct_cdr_df,
+    assert_chain_type_exist,
+    assert_non_empty_file, 
+    assert_struct_file_exist, 
     assert_seqres_atmseq_length,
-    assert_cdr_no_missing_residues_core, 
+    assert_no_cdr_missing_residues, 
     assert_cdr_no_big_b_factor_core,
     assert_cdr_no_non_proline_cis_peptide
 )
@@ -29,7 +32,8 @@ from cdrclass.geometry import (
     superimpose_atoms, atom_wise_dist
 )
 from cdrclass.utils import calc_omega_set_residues, calc_phi_psi_set_residues
-from cdrclass.abdb import CDR_HASH_REV, extract_bb_atoms, parse_single_mar_file
+from cdrclass.exceptions import ClassifierNotExistError
+from cdrclass.abdb import CDR_HASH_REV, extract_bb_atoms, get_resolution_from_abdb_file
 
 # logger 
 from loguru import logger
@@ -61,6 +65,7 @@ def download_and_extract_classifier() -> None:
         (BASE/'assets').mkdir(exist_ok=True, parents=True)
         shutil.unpack_archive(filename=o, extract_dir=BASE/'assets')
 
+
 # ==================== Function ====================
 def concat_chain_dfs(dfs: List[pd.DataFrame]) -> pd.DataFrame:
     # iterate over dfs and add max node_id from previous df to the current df node_id
@@ -74,16 +79,16 @@ def concat_chain_dfs(dfs: List[pd.DataFrame]) -> pd.DataFrame:
             dfo = pd.concat([dfo, df], axis=0, ignore_index=True)
     return dfo
 
-
 def process_single_mar_file(
     struct_fp: Path, 
     abdbid: str = None, 
-    not_strict: bool = False, 
+    strict: bool = True, 
     resolution_thr: float = 2.8, 
     numbering_scheme: str = "ABM", 
     clustal_omega_exe_fp: Path = CLUSTALO, 
     b_factor_atom_set: List[str] = None, 
-    b_factor_cdr_thr: float = 80.
+    b_factor_cdr_thr: float = 80.,
+    chain_types: List[str] = None,
 ):
     
     """
@@ -93,63 +98,58 @@ def process_single_mar_file(
         struct_fp (Path): path to MAR file
         abdbid (str, optional): the abdbid of the MAR file. 
             Defaults to None. this can be derived from the MAR file name
-        not_strict (bool, optional):  
-            If True, will continue to run even if any of the main stage checkpoints is not passed.
-            If False, will break if any of the main stage checkpoints is not passed.
-            Defaults to False.
+        strict (bool, optional):  
+            If True, will break if any of the main stage checkpoints is not passed.
+            If False, will continue to run even if any of the main stage checkpoints is not passed.
+            Defaults to True.
 
     Returns:
         criteria: (Dict)a dict of criteria
         struct_df: (pd.DataFrame) a dataframe of the MAR file
     """
-    if b_factor_atom_set is None:
-        b_factor_atom_set = ["CA"]
-    # criteria
-    criteria = dict(
-        mar_struct_exist=False,
-        mar_struct_resolution=False,
-        mar_struct_not_empty=False,
-        struct_okay=False,
-        chain_exist=False,
-        chain_length_okay=False,
-        cdr_no_missing_residue=False,
-        cdr_no_big_b_factor=False,
-        cdr_no_non_proline_cis_peptide=False,
-    )
-    if abdbid is None:
-        abdbid = struct_fp.stem
+    b_factor_atom_set = b_factor_atom_set or ["CA"]
+    abdbid = abdbid or struct_fp.stem
     fc_type = re.search(r"[A-Za-z\d]{4}_\d+([A-Za-z]*)", abdbid)[1]
-    struct_df = None
-
+    chain_types = chain_types or ["H", "L"]
+    # checkpoints:
+    # NOTE: if strict, all checkpoints must be passed 
+    criteria = dict(mar_struct_exist=False,
+                    mar_struct_resolution=False,
+                    mar_struct_not_empty=False,
+                    struct_okay=False,
+                    chain_exist=False,
+                    chain_length_okay=False,
+                    cdr_no_missing_residue=False,
+                    cdr_no_big_b_factor=False,
+                    cdr_no_non_proline_cis_peptide=False)
+    metadata = dict(cdr_missing_residue={},
+                    cdr_no_big_b_factor={},
+                    cdr_no_non_proline_cis_peptide={})
+    
     # -------------------- assert mar file exists --------------------
     criteria["mar_struct_exist"] = assert_struct_file_exist(struct_fp=struct_fp)
     if not criteria["mar_struct_exist"]:
-        logger.warning(f"{abdbid} mar file does not exist ...")
-
-    # -------------------- check structure resolution --------------------
-    if criteria["mar_struct_exist"]:
-        # parse resolution
-        with open(struct_fp, "r") as f:
-            # get resolution from line 1 
-            l = f.readline()
-            if resolution := re.search(r", ([\d\.]+)A", l):
-                resolution = float(resolution[1])
-                criteria["mar_struct_resolution"] = resolution <= resolution_thr
-
-        if not criteria["mar_struct_resolution"]:
-            logger.warning(f"{abdbid} resolution greater than {resolution_thr} ...")
+        logger.critical(f"{abdbid} mar file does not exist ...")
+        exit(1)
 
     # -------------------- assert not empty file --------------------
-    if criteria["mar_struct_exist"]:
-        criteria["mar_struct_not_empty"] = assert_non_empty_file(struct_fp=struct_fp)
-        if not criteria["mar_struct_not_empty"]:
-            logger.warning(f"{abdbid} mar file is empty ...")
+    criteria["mar_struct_not_empty"] = assert_non_empty_file(struct_fp=struct_fp)
+    if not criteria["mar_struct_not_empty"]:
+        logger.critical(f"{abdbid} mar file is empty ...")
+        exit(2)
+    
+    # -------------------- check structure resolution --------------------
+    r = get_resolution_from_abdb_file(abdb_struct_fp=struct_fp)
+    metadata['resolution'] = r
+    criteria["mar_struct_resolution"] = r <= resolution_thr
+    if not criteria["mar_struct_resolution"]:
+        logger.warning(f"{abdbid} resolution greater than {resolution_thr} ...")
 
     ckpt_file_pass = all(
         [
             criteria["mar_struct_exist"],
-            criteria["mar_struct_resolution"],
             criteria["mar_struct_not_empty"],
+            criteria["mar_struct_resolution"],
         ]
     )
     # ----------------------------------------
@@ -159,23 +159,25 @@ def process_single_mar_file(
     ckpt_chain_pass = False
     # -------------------- assert mar structure is okay --------------------
     atmseq, seqres = {}, {}
-    if ckpt_file_pass or not_strict:
+    if ckpt_file_pass or not strict:
         # get atmseq and seqres
         atmseq, seqres = extract_atmseq_seqres(struct_fp=struct_fp)
 
-        # 1. check heavy and light chains
-        criteria["chain_exist"] = assert_HL_chains_exist(struct_fp=struct_fp, atmseq=atmseq)
-        if not criteria["chain_exist"]:
-            logger.warning(f"{abdbid} chain ...")
+        # 1. check chain_types exist 
+        metadata['chain_type_exists'] = {}
+        for chain_type in chain_types:
+            b = assert_chain_type_exist(struct_fp=struct_fp, chain_type=chain_type)
+            if not b: 
+                logger.warning(f"{abdbid} chain {chain_type=} not exist ...")
+            criteria["chain_exist"] = criteria["chain_exist"] and b
+            metadata['chain_type_exists'][chain_type] = b
 
         # 2. check seqres vs atmseq length
-        if criteria["chain_exist"]:
-            criteria["chain_length_okay"] = assert_seqres_atmseq_length(
-                struct_fp=struct_fp,
-                atmseq=atmseq,
-                seqres=seqres)
-            if not criteria["chain_length_okay"]:
-                logger.warning(f"{abdbid} SEQRES vs ATMSEQ chain length ...")
+        criteria["chain_length_okay"] = assert_seqres_atmseq_length(struct_fp=struct_fp,
+                                                                    atmseq=atmseq,
+                                                                    seqres=seqres)
+        if not criteria["chain_length_okay"]:
+            logger.warning(f"{abdbid} SEQRES vs ATMSEQ chain length ...")
 
         if all((criteria["chain_exist"], criteria["chain_length_okay"])):
             ckpt_chain_pass = True
@@ -184,7 +186,7 @@ def process_single_mar_file(
     # III. checkpoint cdr_pass
     # only check if ckpt_chain_pass is True
     # ----------------------------------------
-    if ckpt_chain_pass or not_strict:
+    if ckpt_chain_pass or not strict:
         # 3. check CDR no missing residues
         # parse abdb file
         df_H, df_L = gen_struct_cdr_df(
@@ -194,19 +196,25 @@ def process_single_mar_file(
             retain_b_factor=True,
             retain_hetatm=False,
             retain_water=False)
-        criteria["cdr_no_missing_residue"] = all([
-            assert_cdr_no_missing_residues_core(struct_fp=struct_fp,
-                                                struct_df=d['df'],
-                                                chain_type=d['chain_type'],
-                                                chain_label=d['chain_label'],
-                                                atmseq=atmseq[d['chain_label']], 
-                                                seqres=seqres[d['chain_label']],
-                                                clustal_omega_executable=clustal_omega_exe_fp,
-                                                numbering_scheme=numbering_scheme)
-            for d in df_H + df_L
-        ])
-        if not criteria["cdr_no_missing_residue"]:
-            logger.warning(f"{abdbid} CDR ...")
+        
+        criteria["cdr_no_missing_residue"] = True
+        for d in df_H + df_L:
+            b, details = assert_no_cdr_missing_residues(struct_fp=struct_fp,
+                                                        struct_df=d['df'],
+                                                        chain_type=d['chain_type'],
+                                                        chain_label=d['chain_label'],
+                                                        atmseq=atmseq[d['chain_label']], 
+                                                        seqres=seqres[d['chain_label']],
+                                                        clustal_omega_executable=clustal_omega_exe_fp,
+                                                        numbering_scheme=numbering_scheme)
+            metadata['cdr_missing_residue'][d['chain_label']] = {'pass': b, 'cdr_has_missing_residue (T->missing; F->no missing)': details}
+            criteria["cdr_no_missing_residue"] = criteria["cdr_no_missing_residue"] and b
+            if not b: 
+                # report details 
+                logger.warning(f"{abdbid} chain_label={d['chain_label']}, chain_type={d['chain_type']} has missing residues ...")
+                for k, v in details.items():
+                    s = 'has missing residues' if v else 'no missing residues'
+                    logger.warning(f"{abdbid} {k}: {s}")
 
         # 4. check loop CA B-factor (filter out ≥ 80 & == 0.)
         if criteria["cdr_no_missing_residue"]:
@@ -221,9 +229,6 @@ def process_single_mar_file(
             if not criteria["cdr_no_big_b_factor"]:
                 logger.warning(f"{abdbid} Loop B factor ...")
 
-        # struct_df = pd.concat([df_H, df_L], axis=0, ignore_index=True)
-        # struct_df["node_id"][df_H.shape[0]:] += df_H.node_id.max() + 1  # correct node_id
-        
         # concat chains to a single Structure DataFrame
         struct_df = concat_chain_dfs(dfs=[d['df'] for d in df_H + df_L])
 
@@ -257,8 +262,7 @@ def process_single_mar_file(
                 criteria["cdr_no_big_b_factor"], criteria["cdr_no_non_proline_cis_peptide"])):
             criteria["struct_okay"] = True
 
-    return criteria, struct_df
-
+    return criteria, struct_df, metadata
 
 # read cdr backbone atom coordinate csv
 def read_cdr_bb_csv(fp: Path=None, df: pd.DataFrame=None, add_residue_identifier: bool = False) -> pd.DataFrame:
@@ -288,7 +292,6 @@ def read_cdr_bb_csv(fp: Path=None, df: pd.DataFrame=None, add_residue_identifier
         df["ri"] = ri_list
 
     return df
-
 
 def extract_phi_psi_omega(struct_df: pd.DataFrame, add_residue_identifier: bool = True) -> pd.DataFrame:
     """
@@ -405,7 +408,6 @@ def merge_in_torsional(emb_a: np.ndarray, emb_b: np.ndarray, clu_radius: float, 
 
     return merge_clu
 
-
 # determine whether merge bound vs. unbound cluster using Cartesian criteria from (Martin & Thornton, 1996)
 def merge_in_cartesian(bb_df_a: pd.DataFrame, bb_df_b: pd.DataFrame, cdr: str, verbose: bool = True) -> bool:
     """
@@ -416,10 +418,37 @@ def merge_in_cartesian(bb_df_a: pd.DataFrame, bb_df_b: pd.DataFrame, cdr: str, v
     xyz_a_ca = extract_ca_atoms(struct_df=bb_df_a, cdr=cdr)
     xyz_b_ca = extract_ca_atoms(struct_df=bb_df_b, cdr=cdr)
 
+    def _find_equivalent_cdr_atom(dfi1: pd.DataFrame, dfi2: pd.DataFrame, cdr:str, atom: str) -> Tuple[List[str], List[str]]:
+        """
+        Find equivalent CDR atoms between two dataframes
+
+        Args:
+            dfi1 (pd.DataFrame): input structure dataframe 1 
+            dfi2 (pd.DataFrame): input structure dataframe 2
+            cdr (str): CDR type e.g. 'L1', 'L2', 'L3', 'H1', 'H2', 'H3' 
+            atom (List[str]): name of atom e.g. 'CA', 'CB'
+
+        Returns:
+            Tuple[List[str], List[str]]: a tuple of lists of equivalent CDR atoms
+            e.g. 
+            (['L50', 'L51', 'L52', 'L53', 'L54', 'L55', 'L56'], 
+             ['l50', 'l51', 'l52', 'l53', 'l54', 'l55', 'l56'])
+             Note the order of the lists are the same as df1, df2 
+        """
+        assert 'ri' in dfi1.columns and 'ri' in dfi2.columns
+        df1, df2 = dfi1.copy(), dfi2.copy()
+        df1['_ri'], df2['_ri'] = df1.ri.apply(str.upper), df2.ri.apply(str.upper)
+        df1 = df1.query('cdr==@cdr and atom==@atom')
+        df2 = df2.query('cdr==@cdr and atom==@atom')
+        # find equivalent _ri 
+        cols=['ri', '_ri']
+        dfm = pd.merge(df1[cols], df2[cols], on='_ri', how='inner', suffixes=('_a', '_b'))
+        return dfm.ri_a.to_list(), dfm.ri_b.to_list()
+    
     # extract CB atoms
-    ri_list = list(set(cb_ri(struct_df=bb_df_a, cdr=cdr)).intersection(set(cb_ri(struct_df=bb_df_b, cdr=cdr))))
-    xyz_a_cb = extract_cb_atoms(struct_df=bb_df_a, cdr=cdr, ri_list=ri_list)
-    xyz_b_cb = extract_cb_atoms(struct_df=bb_df_b, cdr=cdr, ri_list=ri_list)
+    ri_list_a, ri_list_b = _find_equivalent_cdr_atom(dfi1=bb_df_a, dfi2=bb_df_b, cdr=cdr, atom='CB')
+    xyz_a_cb = extract_cb_atoms(struct_df=bb_df_a, cdr=cdr, ri_list=ri_list_a)
+    xyz_b_cb = extract_cb_atoms(struct_df=bb_df_b, cdr=cdr, ri_list=ri_list_b)
 
     # translation vector
     translation_a = xyz_a_ca.mean(axis=0)
@@ -466,7 +495,6 @@ def merge_in_cartesian(bb_df_a: pd.DataFrame, bb_df_b: pd.DataFrame, cdr: str, v
 
     return merge_clu
 
-
 # fetch LRC, AP cluster, and Canonical cluster from the LRC_AP_cluster.json file
 def fetch_lrc_ap_can(lrc_ap_cluster: Dict[str, Any], lrc_name: str, ap_clu_idx: int) -> Tuple[Optional[Dict], Optional[Dict], Optional[Dict]]:
     """
@@ -510,9 +538,22 @@ def fetch_lrc_ap_can(lrc_ap_cluster: Dict[str, Any], lrc_name: str, ap_clu_idx: 
     return lrc, ap_clu, can_clu
 
 
+# --------------------
+# Catch error decorators  
+# --------------------
+def catch_error_from_process_cdr(func):
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except ClassifierNotExistError as e:
+            logger.error(f"{func.__name__} raised an exception: {e}")
+            return {'ClassifierNotExistError': str(e)}
+    return wrapper
+
 # --------------------
 # wrappers
 # --------------------
+@catch_error_from_process_cdr
 def process_cdr(
     cdr: str, 
     chain_label: str,
@@ -536,7 +577,13 @@ def process_cdr(
     cdr_len = dihedral_df.shape[0]
 
     # load classifiers of the same CDR type and CDR length e.g. H1-12 
+    # ===== 0. retrieve pre-calculated classifiers =====
     clf_fps = list(classifier_dir.glob(f"{cdr}-{cdr_len}-*-FreeAb.joblib"))
+    try:
+        assert len(clf_fps) > 0
+    except AssertionError as e:
+        raise ClassifierNotExistError(f"Cannot find classifier for {cdr=} and {cdr_len=}") from e
+    
     clfs = {
         fp.name.split("-FreeAb")[0]: joblib.load(filename=fp)
         for fp in clf_fps 
@@ -630,7 +677,11 @@ def process_cdr(
             exemplar_id = ap['ap_clu_cen_abdbid']
             # exemplar bb_df
             exemplar_bb_df = read_cdr_bb_csv(
-                df=extract_bb_atoms(struct_df=parse_single_mar_file(abdb_dir.joinpath(f"pdb{exemplar_id}.mar"))),
+                # df=extract_bb_atoms(struct_df=parse_single_mar_file(struct_fp=abdb_dir.joinpath(f"pdb{exemplar_id}.mar"))),
+                df=extract_bb_atoms(struct_df=gen_struct_cdr_df(struct_fp=abdb_dir/f"pdb{exemplar_id}.mar",
+                                                                cdr_dict=CDR_HASH_REV['ABM'],
+                                                                concat=True,
+                                                                retain_b_factor=True)),
                 add_residue_identifier=True
             )
             if merge_with_any_exemplar_in_cartesian := merge_in_cartesian(
@@ -702,7 +753,7 @@ def worker(
     cdr: str = None, 
     abdb_dir: Path = None, 
     classifier_dir: Path = None, 
-    lrc_ap_cluster: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    lrc_ap_cluster: Dict[str, Any] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     The core function that compare the input AbDb antibody with pre-calculated 
     Length and Residue Configuration (LRC) Affinity Propagation (AP) clusters
@@ -725,10 +776,10 @@ def worker(
     # ----------------------------------------
     # parse and validate the struct
     # ----------------------------------------
-    criteria, struct_df = process_single_mar_file(
+    criteria, struct_df, metadata = process_single_mar_file(
         struct_fp=abdb_dir.joinpath(f"pdb{abdbid}.mar"),
         abdbid=abdbid,
-        not_strict=True,
+        strict=False,
     )
     if not criteria["cdr_no_missing_residue"]:
         logger.warning(f"CDR {cdr} of {abdbid} has missing residue(s).")
@@ -739,7 +790,8 @@ def worker(
     dihedral_df = extract_phi_psi_omega(struct_df=struct_df)
     bb_df = extract_bb_atoms(struct_df=struct_df, add_residue_identifier=True)
     
-    # create a dictionary mapping CDR type to chain labels, in case of double-heavy and double-light antibodies
+
+    # create a dictionary mapping CDR type to chain labels
     mapping = dihedral_df[['chain', 'cdr']].drop_duplicates().groupby('cdr')['chain'].apply(list).to_dict()
     # ----------------------------------------
     # Specified CDRs 
@@ -778,7 +830,7 @@ def worker(
                     })
             logger.info(f"Processing {abdbid}, CDR-{cdr} Done.")
             print("\n\n\n")
-    return results
+    return results, metadata
 
 # --------------------
 # Main
@@ -821,11 +873,6 @@ def cli() -> argparse.Namespace:  # sourcery skip: inline-immediately-returned-v
     # parse args
     args = parser.parse_args()
     
-    # validate abdb, classifier, LRC_AP_fp
-    assert args.abdb.exists(), f"{args.abdb} does not exist."
-    assert args.lrc_ap_clusters.exists(), f"{args.lrc_ap_clusters} does not exist."
-    assert args.lrc_ap_info.exists(), f"{args.lrc_ap_info} does not exist."
-    
     return args
 
 
@@ -834,6 +881,11 @@ def main(args) -> None:
         # first run
         logger.info("First run, downloading assets ...")
         download_and_extract_classifier()
+    
+    # validate abdb, classifier, LRC_AP_fp
+    assert args.abdb.exists(), f"{args.abdb} does not exist."
+    assert args.lrc_ap_clusters.exists(), f"{args.lrc_ap_clusters} does not exist."
+    assert args.lrc_ap_info.exists(), f"{args.lrc_ap_info} does not exist."
     
     abdb_dir: Path       = args.abdb
     classifier_dir: Path = args.lrc_ap_clusters
@@ -851,7 +903,7 @@ def main(args) -> None:
     
     # block: run the worker 
     # ------------------------------------------------------------------------------
-    results: List[Dict[str, Any]] = worker(
+    results, metadata = worker(
         abdbid=abdbid, 
         cdr=cdr, 
         abdb_dir=abdb_dir, 
@@ -862,6 +914,7 @@ def main(args) -> None:
     
     # save results
     o = (outdir / f"{abdbid}.json").resolve()
+    results.append({'checkpoints': metadata})
     results.append({'job': {'abdbid': abdbid, 
                             'cdr': cdr,
                             'abdb_dir': str(abdb_dir),
