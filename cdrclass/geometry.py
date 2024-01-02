@@ -26,7 +26,7 @@ def cb_ri(struct_df: pd.DataFrame, cdr: str) -> List[str]:
         cdr: (str) CDR identifier either "L1", "L2", "L3", "H1", "H2", "H3"
 
     Returns:
-        ri_list: (List[str]) List of residue identifiers with CB atom present e.g. ['L50']
+        ri_list: (List[str]) List of residue identifiers with CB atom present e.g. ['L50', ...], ['l50', ...]
     """
     assert "ri" in struct_df.columns
     ri_list = struct_df[(struct_df.cdr == cdr) & (struct_df.atom == "CB")]["ri"].drop_duplicates().to_list()
