@@ -1,8 +1,7 @@
 """
 Use pytest to run this test.
-Test parsing double-heavy and double-light domains.
-They differ from common mAb domains in that they have two heavy chains and two light chains.
-In AbDb, the Ab chains are numbered: H and h for heavy chains, L and l for light chains.
+Test 1qd0_0H, whose chain mapping has non-protein chain A
+Should skip this chain in main processing 
 """
 import pytest
 from pathlib import Path
@@ -20,11 +19,7 @@ common_kwargs = {
     'log': None
 }
 
-# args = Namespace(abdbid='3b5g_0', cdr='all', **common_kwargs)  # 3b5g_0: double-light
-args = Namespace(abdbid='1dcl_0', cdr='all', **common_kwargs)  # 1dcl_0: double-light
-# args = Namespace(abdbid='5vm4_0', cdr='all', **common_kwargs)  # 5vm4_0: double-heavy
-# args = Namespace(abdbid='4m3j_0', cdr='all', **common_kwargs)  # 4m3j_0: double-heavy
-# args = Namespace(abdbid='6sc5_0P', cdr='all', **common_kwargs)  # 6sc5_0P: double-heavy, complex
+args = Namespace(abdbid='1qd0_0H', cdr='all', **common_kwargs)  # 1dcl_0: double-light
 
 # ==================== Tests ====================
 def test_main():

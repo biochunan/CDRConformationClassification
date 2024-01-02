@@ -24,7 +24,7 @@ from cdrclass.examine_abdb_struct import (
     assert_struct_file_exist, 
     assert_seqres_atmseq_length,
     assert_no_cdr_missing_residues, 
-    assert_cdr_no_big_b_factor_core,
+    assert_cdr_no_big_b_factor,
     assert_cdr_no_non_proline_cis_peptide
 )
 from cdrclass.geometry import (
@@ -32,8 +32,8 @@ from cdrclass.geometry import (
     superimpose_atoms, atom_wise_dist
 )
 from cdrclass.utils import calc_omega_set_residues, calc_phi_psi_set_residues
-from cdrclass.exceptions import ClassifierNotExistError
-from cdrclass.abdb import CDR_HASH_REV, extract_bb_atoms, get_resolution_from_abdb_file
+from cdrclass.exceptions import *
+from cdrclass.abdb import CDR_HASH_REV, extract_bb_atoms, get_resolution_from_abdb_file, get_chain_map_from_remark_950
 
 # logger 
 from loguru import logger
@@ -162,7 +162,13 @@ def process_single_mar_file(
     if ckpt_file_pass or not strict:
         # get atmseq and seqres
         atmseq, seqres = extract_atmseq_seqres(struct_fp=struct_fp)
-
+        
+        # get chain map from abdb file 
+        chain_map = get_chain_map_from_remark_950(abdb_fp=struct_fp)
+        ab_chain_labels = chain_map.query('chain_type in ["H", "L"]').chain_label.to_list()
+        atmseq = {k: v for k, v in atmseq.items() if k in ab_chain_labels}
+        seqres = {k: v for k, v in seqres.items() if k in ab_chain_labels}
+        
         # 1. check chain_types exist 
         metadata['chain_type_exists'] = {}
         for chain_type in chain_types:
@@ -196,30 +202,24 @@ def process_single_mar_file(
             retain_b_factor=True,
             retain_hetatm=False,
             retain_water=False)
-        
-        criteria["cdr_no_missing_residue"] = True
-        for d in df_H + df_L:
-            b, details = assert_no_cdr_missing_residues(struct_fp=struct_fp,
-                                                        struct_df=d['df'],
-                                                        chain_type=d['chain_type'],
-                                                        chain_label=d['chain_label'],
-                                                        atmseq=atmseq[d['chain_label']], 
-                                                        seqres=seqres[d['chain_label']],
-                                                        clustal_omega_executable=clustal_omega_exe_fp,
-                                                        numbering_scheme=numbering_scheme)
-            metadata['cdr_missing_residue'][d['chain_label']] = {'pass': b, 'cdr_has_missing_residue (T->missing; F->no missing)': details}
-            criteria["cdr_no_missing_residue"] = criteria["cdr_no_missing_residue"] and b
-            if not b: 
-                # report details 
-                logger.warning(f"{abdbid} chain_label={d['chain_label']}, chain_type={d['chain_type']} has missing residues ...")
-                for k, v in details.items():
-                    s = 'has missing residues' if v else 'no missing residues'
-                    logger.warning(f"{abdbid} {k}: {s}")
+        criteria["cdr_no_missing_residue"] = all([
+            assert_no_cdr_missing_residues(struct_fp=struct_fp,
+                                                struct_df=d['df'],
+                                                chain_type=d['chain_type'],
+                                                chain_label=d['chain_label'],
+                                                atmseq=atmseq[d['chain_label']], 
+                                                seqres=seqres[d['chain_label']],
+                                                clustal_omega_executable=clustal_omega_exe_fp,
+                                                numbering_scheme=numbering_scheme)
+            for d in df_H + df_L
+        ])
+        if not criteria["cdr_no_missing_residue"]:
+            logger.warning(f"{abdbid} CDR ...")
 
         # 4. check loop CA B-factor (filter out ≥ 80 & == 0.)
         if criteria["cdr_no_missing_residue"]:
             criteria["cdr_no_big_b_factor"] = all([
-                assert_cdr_no_big_b_factor_core(struct_fp=struct_fp,
+                assert_cdr_no_big_b_factor(struct_fp=struct_fp,
                                                 struct_df=d['df'],
                                                 b_factor_atoms=b_factor_atom_set,
                                                 b_factor_thr=b_factor_cdr_thr,
@@ -262,7 +262,7 @@ def process_single_mar_file(
                 criteria["cdr_no_big_b_factor"], criteria["cdr_no_non_proline_cis_peptide"])):
             criteria["struct_okay"] = True
 
-    return criteria, struct_df, metadata
+    return criteria, struct_df
 
 # read cdr backbone atom coordinate csv
 def read_cdr_bb_csv(fp: Path=None, df: pd.DataFrame=None, add_residue_identifier: bool = False) -> pd.DataFrame:
@@ -548,6 +548,9 @@ def catch_error_from_process_cdr(func):
         except ClassifierNotExistError as e:
             logger.error(f"{func.__name__} raised an exception: {e}")
             return {'ClassifierNotExistError': str(e)}
+        except NaNDihedralError as e:
+            logger.error(f"{func.__name__} raised an exception: {e}")
+            return {'NaNDihedralError': str(e)}
     return wrapper
 
 # --------------------
@@ -580,10 +583,10 @@ def process_cdr(
     # ===== 0. retrieve pre-calculated classifiers =====
     clf_fps = list(classifier_dir.glob(f"{cdr}-{cdr_len}-*-FreeAb.joblib"))
     try:
-        assert len(clf_fps) > 0
+        assert clf_fps
     except AssertionError as e:
         raise ClassifierNotExistError(f"Cannot find classifier for {cdr=} and {cdr_len=}") from e
-    
+
     clfs = {
         fp.name.split("-FreeAb")[0]: joblib.load(filename=fp)
         for fp in clf_fps 
@@ -612,6 +615,11 @@ def process_cdr(
         angle_type=["phi", "psi"]
     )  # => shape (L, 4)
     X = loop_repr.reshape(1, -1)
+    # if np.nan in X, raise NaNDihedralError error 
+    if np.isnan(X).any():
+        logger.error(f"Found NaN dihedral angles in {abdbid=}, {cdr=}")
+        logger.error(f'Dihedral DataFrame:\n{dihedral_df}')
+        raise NaNDihedralError(f"{abdbid=}, {cdr=}, Found NaN dihedral angles")
 
     # ===== 3. find the closest LRC/CAN/AP to the query loop =====
     clf_name, dists, cluster_idx_list = [], [], []
@@ -753,7 +761,7 @@ def worker(
     cdr: str = None, 
     abdb_dir: Path = None, 
     classifier_dir: Path = None, 
-    lrc_ap_cluster: Dict[str, Any] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    lrc_ap_cluster: Dict[str, Any] = None) -> List[Dict[str, Any]]:
     """
     The core function that compare the input AbDb antibody with pre-calculated 
     Length and Residue Configuration (LRC) Affinity Propagation (AP) clusters
@@ -776,13 +784,13 @@ def worker(
     # ----------------------------------------
     # parse and validate the struct
     # ----------------------------------------
-    criteria, struct_df, metadata = process_single_mar_file(
+    criteria, struct_df = process_single_mar_file(
         struct_fp=abdb_dir.joinpath(f"pdb{abdbid}.mar"),
         abdbid=abdbid,
         strict=False,
     )
     if not criteria["cdr_no_missing_residue"]:
-        logger.warning(f"CDR {cdr} of {abdbid} has missing residue(s).")
+        logger.warning(f"{abdbid} CDR has missing residue(s).")
 
     # ----------------------------------------
     # extract dihedrals and backbone atoms
@@ -830,7 +838,7 @@ def worker(
                     })
             logger.info(f"Processing {abdbid}, CDR-{cdr} Done.")
             print("\n\n\n")
-    return results, metadata
+    return results
 
 # --------------------
 # Main
@@ -869,6 +877,9 @@ def cli() -> argparse.Namespace:  # sourcery skip: inline-immediately-returned-v
     # LRC AP cluster associated info file  
     parser.add_argument('-f', '--lrc_ap_info', type=Path, default=BASE/'assets'/'LRC_AP_cluster.json', 
                         help="LRC_AP_cluster.json file path that holds information about each precalculated LRC AP cluster")
+    # add a log file handle 
+    parser.add_argument('-l', '--log', type=Path, default=None, 
+                        help="log file path to save log info. If None, only print to stdout and stderr.")
     
     # parse args
     args = parser.parse_args()
@@ -877,6 +888,9 @@ def cli() -> argparse.Namespace:  # sourcery skip: inline-immediately-returned-v
 
 
 def main(args) -> None:
+    if args.log is not None:
+        logger.add(sink=args.log, level="DEBUG")
+        
     if is_first_run():
         # first run
         logger.info("First run, downloading assets ...")
@@ -903,7 +917,7 @@ def main(args) -> None:
     
     # block: run the worker 
     # ------------------------------------------------------------------------------
-    results, metadata = worker(
+    results: List[Dict[str, Any]] = worker(
         abdbid=abdbid, 
         cdr=cdr, 
         abdb_dir=abdb_dir, 
@@ -914,7 +928,6 @@ def main(args) -> None:
     
     # save results
     o = (outdir / f"{abdbid}.json").resolve()
-    results.append({'checkpoints': metadata})
     results.append({'job': {'abdbid': abdbid, 
                             'cdr': cdr,
                             'abdb_dir': str(abdb_dir),

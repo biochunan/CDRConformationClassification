@@ -17,6 +17,7 @@ common_kwargs = {
     'abdb': Path('/AbDb'),
     'lrc_ap_clusters': Path(cdrclass.__path__[0]).joinpath('assets', 'classifier'),
     'lrc_ap_info': Path(cdrclass.__path__[0]).joinpath('assets', 'LRC_AP_cluster.json'),
+    'log': None
 }
 cases = [
     Namespace(abdbid='1u0q_1', cdr='all', **common_kwargs),  # 1u0q_1: single-heavy

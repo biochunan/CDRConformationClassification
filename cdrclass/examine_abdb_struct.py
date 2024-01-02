@@ -26,16 +26,14 @@ from typing import Dict, Tuple, Sequence, List, Optional, Union
 from Bio.PDB import PDBParser
 from Bio.PDB.Selection import unfold_entities
 from Bio.SeqIO import PdbIO
+# logging 
+from loguru import logger 
 
 # cdrclass 
 from cdrclass.pdb import chain2df
 from cdrclass.abdb import CDR_HASH_REV, CDR_HASH
 from cdrclass.run_align import pairwise_align_clustalomega, print_format_alignment
 from cdrclass.utils import calc_omega_set_residues
-
-# logging 
-import logging
-logger = logging.getLogger("examine_abdb_struct")
 
 
 def generate_anchor_residue_identifier(cdr_dict: Dict[str, Dict[str, List[str]]], numbering_scheme: str) -> Dict[str, List[Tuple[str, int]]]:
@@ -589,12 +587,12 @@ def assert_no_cdr_missing_residues(struct_fp: Path,
     return True, result
 
 
-def assert_cdr_no_big_b_factor_core(struct_fp: Path,
-                                    struct_df: pd.DataFrame,
-                                    b_factor_atoms: List[str],
-                                    b_factor_thr: float,
-                                    numbering_scheme: str,
-                                    ) -> bool:
+def assert_cdr_no_big_b_factor(struct_fp: Path,
+                               struct_df: pd.DataFrame,
+                               b_factor_atoms: List[str],
+                               b_factor_thr: float,
+                               numbering_scheme: str,
+                               ) -> bool:
     """
     Assert CDR loop specified atom set B factor is smaller than the thr by default 80.
     Args:

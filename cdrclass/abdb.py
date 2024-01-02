@@ -14,10 +14,7 @@ from Bio.PDB.Selection import unfold_entities
 from Bio.SeqIO import PdbIO
 
 # logging
-import logging
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s {%(pathname)s:%(lineno)d} [%(levelname)s] %(name)s - %(message)s [%(threadName)s]',
-                    datefmt='%H:%M:%S')
+from loguru import logger
 
 # custom 
 from cdrclass.pdb import chain2df
@@ -58,6 +55,74 @@ CDR_HASH_REV = dict(
 
 
 # ==================== Function ====================
+def summarize_ab_type_from_chain_map(chain_map: pd.DataFrame) -> List[str]:
+    """
+    Summarize antibody type from chain_map
+    E.g. chain_map 
+        chain_type  chain_label  chain_original
+    0            H            H               A
+
+    Args:
+        chain_map (pd.DataFrame): _description_
+
+    Returns:
+        List[str]: e.g.
+        ['single-domain', 'single-heavy'] or 
+        ['single-domain', 'single-light'] or 
+        ['double-domain', 'double-heavy'] or
+        ['double-domain', 'double-light'] or
+        ['double-domain', 'heavy-light']
+    """
+    ab_type = []
+    # count "H" and "L" in chain_type
+    num_ab_chains = 0
+    counts = chain_map["chain_type"].value_counts()
+    num_H, num_L = counts.get("H", 0), counts.get("L", 0)
+    num_ab_chains = sum([num_H, num_L])
+    if num_ab_chains == 1:
+        ab_type.append("single-domain")
+        if num_H == 1:
+            ab_type.append("single-heavy")
+        elif num_L == 1:
+            ab_type.append("single-light")
+    elif num_ab_chains == 2:
+        ab_type.append("double-domain")
+        if num_H == 2:
+            ab_type.append("double-heavy")
+        if num_L == 2:
+            ab_type.append("double-light")
+        if num_H == 1 and num_L == 1:
+            ab_type.append("heavy-light")
+    elif num_ab_chains > 2:
+        ab_type.append("multi-domain")
+    return ab_type
+
+
+def get_chain_map_from_remark_950(
+        abdb_fp: Path,
+        return_ab_type: bool = False
+) -> Tuple[float, List[str], pd.DataFrame]:
+    # parse REMARK 950
+    with open(abdb_fp, "r") as f:
+        remark950 = []
+        l = f.readline()
+        while not l.startswith("REMARK 950"):
+            l = f.readline()
+        while l.startswith("REMARK 950"):
+            remark950.append(l.strip())
+            l = f.readline()
+
+    # chain_map
+    cols = ["chain_type", "chain_label", "chain_original"]
+    chain_map = pd.DataFrame(
+        [l.split()[-3:] for l in remark950[2:]],
+        columns=cols
+    )
+    if return_ab_type:
+        return chain_map, summarize_ab_type_from_chain_map(chain_map)
+    return chain_map
+
+
 def get_resolution_from_abdb_file(abdb_struct_fp: Path) -> float:
     """ get resolution from .mar file """
     with open(abdb_struct_fp, "r") as f:
@@ -177,7 +242,7 @@ def extract_bb_atoms(struct_df: pd.DataFrame, include_CB: bool = True, add_resid
             try:
                 assert a in atms
             except AssertionError:
-                logging.warning(f"CAUTION: Atom type {a} not found in {c}{r}{alt}, resn: {resn}, cdr: {cdr}")
+                logger.warning(f"CAUTION: Atom type {a} not found in {c}{r}{alt}, resn: {resn}, cdr: {cdr}")
 
     # add residue identifier if True
     if add_residue_identifier:
