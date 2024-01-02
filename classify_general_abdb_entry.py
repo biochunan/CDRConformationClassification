@@ -23,7 +23,7 @@ from cdrclass.examine_abdb_struct import (
     assert_non_empty_file, 
     assert_struct_file_exist, 
     assert_seqres_atmseq_length,
-    assert_cdr_no_missing_residues_core, 
+    assert_no_cdr_missing_residues, 
     assert_cdr_no_big_b_factor_core,
     assert_cdr_no_non_proline_cis_peptide
 )
@@ -197,7 +197,7 @@ def process_single_mar_file(
             retain_hetatm=False,
             retain_water=False)
         criteria["cdr_no_missing_residue"] = all([
-            assert_cdr_no_missing_residues_core(struct_fp=struct_fp,
+            assert_no_cdr_missing_residues(struct_fp=struct_fp,
                                                 struct_df=d['df'],
                                                 chain_type=d['chain_type'],
                                                 chain_label=d['chain_label'],

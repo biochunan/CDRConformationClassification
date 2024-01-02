@@ -377,7 +377,7 @@ def _cdr_has_missing_residues(*,
                               merged_df: pd.DataFrame, 
                               chain_type: str,
                               anchor_res: Dict[str, List[Tuple[str, int]]],
-                              struct_id: str):
+                              struct_id: str)-> Dict[str, bool]:
     """
     Find CDR missing residues (if any)
     Updates: use anchor residue as boundary residue node_id
@@ -429,6 +429,8 @@ def _cdr_has_missing_residues(*,
         struct_id: (str) structure id
     Returns:
         cdr_containing_missing_residues: (Dict) key: cdr loop name; val: bool
+        e.g. {'H1': False, 'H2': False, 'H3': True} 
+        means H1 and H2 have no missing residues, H3 has missing residues
     """
     # if chain_type not in the dataframe, add column chain_type 
     assert chain_type in ('H', 'L')
@@ -487,7 +489,7 @@ def _cdr_has_missing_residues(*,
     return cdr_containing_missing_residues
 
 
-def assert_cdr_no_missing_residues_core(struct_fp: Path,
+def assert_no_cdr_missing_residues(struct_fp: Path,
                                         chain_label: str, 
                                         chain_type: str,
                                         struct_df: pd.DataFrame,
@@ -495,7 +497,24 @@ def assert_cdr_no_missing_residues_core(struct_fp: Path,
                                         numbering_scheme: str,
                                         atmseq: str,
                                         seqres: str,
-                                        ) -> bool:
+                                        ) -> Tuple[bool, Dict[str, bool]]:
+    """
+    Assert no CDR missing residues in the CDR loops of the specified chain.
+    Args:
+        struct_fp: (Path) path to structure file
+        chain_label: (str) chain label
+        chain_type: (str) chain type
+        struct_df: (pd.DataFrame) Structure DataFrame for a chain 
+        clustal_omega_executable: (str) path to clustal omega executable
+        numbering_scheme: (str) cdr numbering scheme either `CHOTHIA` or `ABM`
+        atmseq: (str) ATMSEQ sequence
+        seqres: (str) SEQRES sequence
+    Returns:
+        bool: True if no missing residues detected in any of the CDR loops in the specified chain, 
+            otherwise False meaning there are missing residues in at least one of the CDR loops in the specified chain
+        result: (Dict) key: cdr loop name; val: bool
+            e.g. {'H1': False, 'H2': False, 'H3': True} for chain_type="H"
+    """
     df = struct_df.copy()
     # vars
     numbering_scheme = numbering_scheme.upper()
@@ -565,9 +584,9 @@ def assert_cdr_no_missing_residues_core(struct_fp: Path,
 
     # check missing residues
     if True in result.values():
-        return False
+        return False, result
 
-    return True
+    return True, result
 
 
 def assert_cdr_no_big_b_factor_core(struct_fp: Path,
