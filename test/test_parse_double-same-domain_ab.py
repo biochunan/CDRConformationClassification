@@ -17,6 +17,7 @@ common_kwargs = {
     'abdb': Path('/AbDb'),
     'lrc_ap_clusters': Path('/workspaces/CDRConformationClassification/dirs/classifier'),
     'lrc_ap_info': Path('/workspaces/CDRConformationClassification/dirs/LRC_AP_cluster.json'),
+    'log': None
 }
 
 # args = Namespace(abdbid='3b5g_0', cdr='all', **common_kwargs)  # 3b5g_0: double-light
