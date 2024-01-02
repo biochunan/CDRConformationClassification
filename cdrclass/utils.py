@@ -2,11 +2,7 @@ import numpy as np
 import pandas as pd
 from typing import List, Tuple
 # logging
-import logging
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s {%(pathname)s:%(lineno)d} [%(levelname)s] %(name)s - %(message)s [%(threadName)s]',
-                    datefmt='%H:%M:%S')
-logger = logging.getLogger(__name__)
+from loguru import logger 
 
 
 def calc_dihedral(
@@ -116,9 +112,12 @@ def calc_phi_psi_set_residues(
 
         # compute phi and psi angles for specified residue identifiers
         phi, psi = calc_phi_psi_single_residue(struct_df=struct_df, node_id=ni)
+        # convert to float if not None
+        phi = float(phi) if phi is not None else phi
+        psi = float(psi) if psi is not None else psi
 
         # append to result
-        phi_psi.append((ri, rn, float(phi), float(psi)))
+        phi_psi.append((ri, rn, phi, psi))
 
     return phi_psi
 
