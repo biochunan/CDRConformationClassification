@@ -58,6 +58,16 @@ CDR_HASH_REV = dict(
 
 
 # ==================== Function ====================
+def get_resolution_from_abdb_file(abdb_struct_fp: Path) -> float:
+    """ get resolution from .mar file """
+    with open(abdb_struct_fp, "r") as f:
+        # get resolution from line 1 
+        l = f.readline()
+        if resolution := re.search(r", ([\d\.]+)A", l):
+            resolution = float(resolution[1])
+    return resolution
+
+
 def assign_cdr_class(df: pd.DataFrame, cdr_dict: Dict[str, str]):
     assert "chain" in df.columns and "resi" in df.columns
     df["cdr"] = [
@@ -118,29 +128,22 @@ def gen_struct_cdr_df(
 
 def parse_single_mar_file(
     struct_fp: Path,
-    abdbid: str = None
+    abdbid: str = None,
+    cdr_definition: str=None
 ) -> pd.DataFrame:
     """ parse single .mar file """
-    
-    if abdbid is None:
-        abdbid = struct_fp.stem
+    abdbid = abdbid or struct_fp.stem
+    cdr_definition = cdr_definition or "ABM"
     
     struct_df = None
-    df_H, df_L = gen_struct_cdr_df(
+    struct_df = gen_struct_cdr_df(
         struct_fp=struct_fp,
-        cdr_dict=CDR_HASH_REV["ABM"],
-        concat=False,
+        cdr_dict=CDR_HASH_REV[cdr_definition],
         retain_b_factor=True,
         retain_hetatm=False,
-        retain_water=False
+        retain_water=False,
+        concat=True,
     )
-
-    # concat Heavy and Light chain to single Structure DataFrame
-    struct_df = pd.concat([df_H, df_L], axis=0, ignore_index=True)
-    
-    # correct node_id
-    struct_df["node_id"][df_H.shape[0]:] += df_H.node_id.max() + 1
-
     return struct_df
 
 
