@@ -13,12 +13,14 @@ A clear and concise description of what the bug is.
 **To Reproduce**
 Steps to reproduce the behavior:
 1. Running environment
-  - Version used: 
-  - Operating system and version (e.g. Ubuntu 22.04) 
+  - Version used (e.g. latest): 
+  - Operating system and version  (e.g. Ubuntu 22.04):
   - Link to your project (optional) 
-2. Input data: input data 
-3. Running commands e.g. shell, python, etc.  
-4. Errors
+3. Running commands (e.g. shell, python, etc.):  
+4. Errors (relevant log content)
+```log
+Add your log here
+```
 
 **Expected behavior**
 A clear and concise description of what you expected to happen.
