@@ -7,8 +7,16 @@ Unbound CDR conformation clusters, both Canonical and affinity propagation (AP) 
 
 A JSON file summarizing the LRC groups, Canonical clusters, and AP clusters is placed in [dirs/LRC_AP_cluster.json](./dirs/LRC_AP_cluster.json).
 
-A snapshot of AbDb version `20220926` will be available on [Zenodo](https://zenodo.org/) upon publication. 
-
+<!-- A snapshot of AbDb version `20220926` will be available on [Zenodo](https://zenodo.org/) upon publication.  -->
+To obtain a snapshot of the AbDb version `20220926` used in this publication 
+```sh 
+# install gdown if not installed
+$ pip install gdown
+$ gdown https://drive.google.com/uc?id=1kAgSOjYBqb02IIEsc9yhJNiaoWRhpoaL -O AbDb_20220926.tar.gz
+$ tar -zxf AbDb_20220926.tar.gz
+```
+- This will download a tarball of AbDb version `20220926` (size: 2.4G) and extract it to current folder `./abdb_newdata_20220926`, you can rename the folder to e.g. `AbDb` if you like.
+- You can place this folder anywhere on your machine, but make sure to include a softlink to it in `./dirs` folder (see [Dependencies](#dependencies) for details)
 ## Requirements
 ```
 - python == 3.9
