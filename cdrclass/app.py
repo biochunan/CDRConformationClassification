@@ -1,12 +1,12 @@
 """
-Classify the CDR conformation of an input abdb entry into canonical classes 
+Classify the CDR conformation of an input abdb entry into canonical classes
 using classifiers trained on unbound CDR conformations.
 """
 # basic
 import re
 import json
 import gdown
-import shutil 
+import shutil
 import joblib
 import textwrap
 import argparse
@@ -15,27 +15,27 @@ import pandas as pd
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional, Any
 
-# custom packages 
+# custom packages
 from cdrclass.examine_abdb_struct import (
-    extract_atmseq_seqres, 
+    extract_atmseq_seqres,
     gen_struct_cdr_df,
     assert_chain_type_exist,
-    assert_non_empty_file, 
-    assert_struct_file_exist, 
+    assert_non_empty_file,
+    assert_struct_file_exist,
     assert_seqres_atmseq_length,
-    assert_no_cdr_missing_residues, 
+    assert_no_cdr_missing_residues,
     assert_cdr_no_big_b_factor,
     assert_cdr_no_non_proline_cis_peptide
 )
 from cdrclass.geometry import (
-    extract_ca_atoms, extract_cb_atoms, cb_ri, 
+    extract_ca_atoms, extract_cb_atoms, cb_ri,
     superimpose_atoms, atom_wise_dist
 )
 from cdrclass.utils import calc_omega_set_residues, calc_phi_psi_set_residues
 from cdrclass.exceptions import *
 from cdrclass.abdb import CDR_HASH_REV, extract_bb_atoms, get_resolution_from_abdb_file, get_chain_map_from_remark_950
 
-# logger 
+# logger
 from loguru import logger
 from rich.logging import RichHandler
 logger.configure(
@@ -48,7 +48,7 @@ logger.configure(
 # ==================== Constants ====================
 CLUSTALO = shutil.which("clustalo")
 BASE = Path(__file__).resolve().parent  # cdrclass/
-ASSETS_URL = 'https://drive.google.com/uc?id=1kERH5wYVMhCvmAlDPL835Ms4ZhxL0pQQ'
+ASSETS_ID = '1kERH5wYVMhCvmAlDPL835Ms4ZhxL0pQQ'
 ABDB=None
 
 # ==================== Installation ====================
@@ -60,7 +60,8 @@ def download_and_extract_classifier() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         # download classifier
         o = Path(tmpdir).joinpath('assets.tar.gz').as_posix()
-        gdown.download(ASSETS_URL, output=o, quiet=False)
+        gdown.download(id=ASSETS_ID, output=o, quiet=False,
+                       fuzzy=True, use_cookies=False, verify=False)
         # extract classifier
         (BASE/'assets').mkdir(exist_ok=True, parents=True)
         shutil.unpack_archive(filename=o, extract_dir=BASE/'assets')
@@ -69,24 +70,24 @@ def download_and_extract_classifier() -> None:
 # ==================== Function ====================
 def concat_chain_dfs(dfs: List[pd.DataFrame]) -> pd.DataFrame:
     # iterate over dfs and add max node_id from previous df to the current df node_id
-    dfo = None 
-    for dfi in dfs: 
+    dfo = None
+    for dfi in dfs:
         df = dfi.copy()
-        if dfo is None: 
+        if dfo is None:
             dfo = dfi.copy()
-        else: 
+        else:
             df["node_id"] += dfo.node_id.max() + 1
             dfo = pd.concat([dfo, df], axis=0, ignore_index=True)
     return dfo
 
 def process_single_mar_file(
-    struct_fp: Path, 
-    abdbid: str = None, 
-    strict: bool = True, 
-    resolution_thr: float = 2.8, 
-    numbering_scheme: str = "ABM", 
-    clustal_omega_exe_fp: Path = CLUSTALO, 
-    b_factor_atom_set: List[str] = None, 
+    struct_fp: Path,
+    abdbid: str = None,
+    strict: bool = True,
+    resolution_thr: float = 2.8,
+    numbering_scheme: str = "ABM",
+    clustal_omega_exe_fp: Path = CLUSTALO,
+    b_factor_atom_set: List[str] = None,
     b_factor_cdr_thr: float = 80.,
     chain_types: List[str] = None,
 ):
@@ -96,9 +97,9 @@ def process_single_mar_file(
 
     Args:
         struct_fp (Path): path to MAR file
-        abdbid (str, optional): the abdbid of the MAR file. 
+        abdbid (str, optional): the abdbid of the MAR file.
             Defaults to None. this can be derived from the MAR file name
-        strict (bool, optional):  
+        strict (bool, optional):
             If True, will break if any of the main stage checkpoints is not passed.
             If False, will continue to run even if any of the main stage checkpoints is not passed.
             Defaults to True.
@@ -112,7 +113,7 @@ def process_single_mar_file(
     fc_type = re.search(r"[A-Za-z\d]{4}_\d+([A-Za-z]*)", abdbid)[1]
     chain_types = chain_types or ["H", "L"]
     # checkpoints:
-    # NOTE: if strict, all checkpoints must be passed 
+    # NOTE: if strict, all checkpoints must be passed
     criteria = dict(mar_struct_exist=False,
                     mar_struct_resolution=False,
                     mar_struct_not_empty=False,
@@ -163,17 +164,17 @@ def process_single_mar_file(
         # get atmseq and seqres
         atmseq, seqres = extract_atmseq_seqres(struct_fp=struct_fp)
 
-        # get chain map from abdb file 
+        # get chain map from abdb file
         chain_map = get_chain_map_from_remark_950(abdb_fp=struct_fp)
         ab_chain_labels = chain_map.query('chain_type in ["H", "L"]').chain_label.to_list()
         atmseq = {k: v for k, v in atmseq.items() if k in ab_chain_labels}
         seqres = {k: v for k, v in seqres.items() if k in ab_chain_labels}
 
-        # 1. check chain_types exist 
+        # 1. check chain_types exist
         metadata['chain_type_exists'] = {}
         for chain_type in chain_types:
             b = assert_chain_type_exist(struct_fp=struct_fp, chain_type=chain_type)
-            if not b: 
+            if not b:
                 logger.warning(f"{abdbid} chain {chain_type=} not exist ...")
             criteria["chain_exist"] = criteria["chain_exist"] and b
             metadata['chain_type_exists'][chain_type] = b
@@ -202,21 +203,21 @@ def process_single_mar_file(
             retain_b_factor=True,
             retain_hetatm=False,
             retain_water=False)
-        
+
         criteria["cdr_no_missing_residue"] = True
         for d in df_H + df_L:
             b, details = assert_no_cdr_missing_residues(struct_fp=struct_fp,
                                                         struct_df=d['df'],
                                                         chain_type=d['chain_type'],
                                                         chain_label=d['chain_label'],
-                                                        atmseq=atmseq[d['chain_label']], 
+                                                        atmseq=atmseq[d['chain_label']],
                                                         seqres=seqres[d['chain_label']],
                                                         clustal_omega_executable=clustal_omega_exe_fp,
                                                         numbering_scheme=numbering_scheme)
             metadata['cdr_missing_residue'][d['chain_label']] = {'pass': b, 'cdr_has_missing_residue (T->missing; F->no missing)': details}
             criteria["cdr_no_missing_residue"] = criteria["cdr_no_missing_residue"] and b
-            if not b: 
-                # report details 
+            if not b:
+                # report details
                 logger.warning(f"{abdbid} chain_label={d['chain_label']}, chain_type={d['chain_type']} has missing residues ...")
                 for k, v in details.items():
                     s = 'has missing residues' if v else 'no missing residues'
@@ -274,7 +275,7 @@ def process_single_mar_file(
 def read_cdr_bb_csv(fp: Path=None, df: pd.DataFrame=None, add_residue_identifier: bool = False) -> pd.DataFrame:
     """
     Extract CDR backbone atoms from a csv file or a dataframe
-    At least provide either fp or df 
+    At least provide either fp or df
 
     Args:
         fp (Path, optional): file path to pre-processed backbone csv file. Defaults to None.
@@ -284,9 +285,9 @@ def read_cdr_bb_csv(fp: Path=None, df: pd.DataFrame=None, add_residue_identifier
     Returns:
         pd.DataFrame: _description_
     """
-    # assert at least one of fp or df is provided 
+    # assert at least one of fp or df is provided
     assert (fp is not None) or (df is not None)
-    
+
     if fp is not None:
         df = pd.read_csv(fp)
     df.fillna("", inplace=True)
@@ -307,10 +308,10 @@ def extract_phi_psi_omega(struct_df: pd.DataFrame, add_residue_identifier: bool 
         struct_df (pd.DataFrame): structure dataframe
         add_residue_identifier (bool, optional): add residue identifier using chain_label, residue_number, insertion. Defaults to True.
         --------------------------
-        name           | col name 
+        name           | col name
         --------------------------
         chain_label    | chain
-        residue_number | resi 
+        residue_number | resi
         insertion      | alt
         --------------------------
 
@@ -338,7 +339,7 @@ def extract_phi_psi_omega(struct_df: pd.DataFrame, add_residue_identifier: bool 
         dihedral_dict["omega"].append(omega[-1])
 
     cdr_df = cdr_df.merge(pd.DataFrame(dihedral_dict), on="node_id").drop(columns=["node_id"])
-    
+
     # add residue identifier if True
     if add_residue_identifier:
         # create residue identifier
@@ -387,7 +388,7 @@ def convert_one_loop_dihedral_to_trigonometric_array(
 
 
 # --------------------
-# merge in torsion 
+# merge in torsion
 # and cartesian
 # --------------------
 # determine whether merge bound vs. unbound cluster using AP cluster radius
@@ -429,28 +430,28 @@ def merge_in_cartesian(bb_df_a: pd.DataFrame, bb_df_b: pd.DataFrame, cdr: str, v
         Find equivalent CDR atoms between two dataframes
 
         Args:
-            dfi1 (pd.DataFrame): input structure dataframe 1 
+            dfi1 (pd.DataFrame): input structure dataframe 1
             dfi2 (pd.DataFrame): input structure dataframe 2
-            cdr (str): CDR type e.g. 'L1', 'L2', 'L3', 'H1', 'H2', 'H3' 
+            cdr (str): CDR type e.g. 'L1', 'L2', 'L3', 'H1', 'H2', 'H3'
             atom (List[str]): name of atom e.g. 'CA', 'CB'
 
         Returns:
             Tuple[List[str], List[str]]: a tuple of lists of equivalent CDR atoms
-            e.g. 
-            (['L50', 'L51', 'L52', 'L53', 'L54', 'L55', 'L56'], 
+            e.g.
+            (['L50', 'L51', 'L52', 'L53', 'L54', 'L55', 'L56'],
              ['l50', 'l51', 'l52', 'l53', 'l54', 'l55', 'l56'])
-             Note the order of the lists are the same as df1, df2 
+             Note the order of the lists are the same as df1, df2
         """
         assert 'ri' in dfi1.columns and 'ri' in dfi2.columns
         df1, df2 = dfi1.copy(), dfi2.copy()
         df1['_ri'], df2['_ri'] = df1.ri.apply(str.upper), df2.ri.apply(str.upper)
         df1 = df1.query('cdr==@cdr and atom==@atom')
         df2 = df2.query('cdr==@cdr and atom==@atom')
-        # find equivalent _ri 
+        # find equivalent _ri
         cols=['ri', '_ri']
         dfm = pd.merge(df1[cols], df2[cols], on='_ri', how='inner', suffixes=('_a', '_b'))
         return dfm.ri_a.to_list(), dfm.ri_b.to_list()
-    
+
     # extract CB atoms
     ri_list_a, ri_list_b = _find_equivalent_cdr_atom(dfi1=bb_df_a, dfi2=bb_df_b, cdr=cdr, atom='CB')
     xyz_a_cb = extract_cb_atoms(struct_df=bb_df_a, cdr=cdr, ri_list=ri_list_a)
@@ -507,7 +508,7 @@ def fetch_lrc_ap_can(lrc_ap_cluster: Dict[str, Any], lrc_name: str, ap_clu_idx: 
     Fetch LRC, AP cluster, and Canonical cluster from the LRC_AP_cluster.json file
 
     Args:
-        lrc_ap_cluster (Dict[str, Any]): parsed LRC_AP_cluster.json content 
+        lrc_ap_cluster (Dict[str, Any]): parsed LRC_AP_cluster.json content
         lrc_name (str): e.g. "H1-10-allT"
         ap_clu_idx (int): e.g. 4
 
@@ -515,10 +516,10 @@ def fetch_lrc_ap_can(lrc_ap_cluster: Dict[str, Any], lrc_name: str, ap_clu_idx: 
         Tuple[Optional[Dict], Optional[Dict], Optional[Dict]]: LRC, AP cluster, and Canonical cluster
             each is a dictionary object
     """
-    # 1. find the LRC group 
+    # 1. find the LRC group
     lrc = next(
         (i for i in lrc_ap_cluster if i["LRC"] == lrc_name),
-        None 
+        None
     )
     # 2. find the AP cluster with the specified ap_clu_idx
     ap_clu = next(
@@ -527,11 +528,11 @@ def fetch_lrc_ap_can(lrc_ap_cluster: Dict[str, Any], lrc_name: str, ap_clu_idx: 
             for ap in lrc['AP_clusters']
             if ap['ap_clu_label'] == ap_clu_idx
         ),
-        None 
+        None
     )
     # ap cluster exemplar name e.g. "1a4k_0"
     ap_name = ap_clu['ap_clu_cen_abdbid']
-    
+
     # find canonical cluster that has the AP cluster specified by `ap_name`
     can_clu = next(
         (
@@ -545,7 +546,7 @@ def fetch_lrc_ap_can(lrc_ap_cluster: Dict[str, Any], lrc_name: str, ap_clu_idx: 
 
 
 # --------------------
-# Catch error decorators  
+# Catch error decorators
 # --------------------
 def catch_error_from_process_cdr(func):
     def wrapper(*args, **kwargs):
@@ -564,17 +565,17 @@ def catch_error_from_process_cdr(func):
 # --------------------
 @catch_error_from_process_cdr
 def process_cdr(
-    cdr: str, 
+    cdr: str,
     chain_label: str,
     abdb_dir: Path,
-    dihedral_df: pd.DataFrame, 
+    dihedral_df: pd.DataFrame,
     bb_df: pd.DataFrame,
     abdbid: str,
     classifier_dir: Path,
     lrc_ap_cluster: Dict[str, Any],
 ) -> Dict[str, Any]:
     # ----------------------------------------
-    # prepare processing for each CDR type 
+    # prepare processing for each CDR type
     # ----------------------------------------
     # # extract column cdr == `cdr`
     # dihedral_df = dihedral_df[dihedral_df.cdr == cdr].copy()
@@ -585,17 +586,17 @@ def process_cdr(
     # load classifiers of the same CDR type and CDR length e.g. H1-12
     cdr_len = dihedral_df.shape[0]
 
-    # load classifiers of the same CDR type and CDR length e.g. H1-12 
+    # load classifiers of the same CDR type and CDR length e.g. H1-12
     # ===== 0. retrieve pre-calculated classifiers =====
     clf_fps = list(classifier_dir.glob(f"{cdr}-{cdr_len}-*-FreeAb.joblib"))
     try:
         assert clf_fps
     except AssertionError as e:
         raise ClassifierNotExistError(f"Cannot find classifier for {cdr=} and {cdr_len=}") from e
-    
+
     clfs = {
         fp.name.split("-FreeAb")[0]: joblib.load(filename=fp)
-        for fp in clf_fps 
+        for fp in clf_fps
     }
 
     # ===== 1. create a warning if non-proline cis-residues are found =====
@@ -621,7 +622,7 @@ def process_cdr(
         angle_type=["phi", "psi"]
     )  # => shape (L, 4)
     X = loop_repr.reshape(1, -1)
-    # if np.nan in X, raise NaNDihedralError error 
+    # if np.nan in X, raise NaNDihedralError error
     if np.isnan(X).any():
         logger.error(f"Found NaN dihedral angles in {abdbid=}, {cdr=}")
         logger.error(f'Dihedral DataFrame:\n{dihedral_df}')
@@ -645,8 +646,8 @@ def process_cdr(
 
     # get AP and CAN cluster
     lrc, closest_ap, closest_can = fetch_lrc_ap_can(
-        lrc_ap_cluster=lrc_ap_cluster, 
-        lrc_name=closest_clf, 
+        lrc_ap_cluster=lrc_ap_cluster,
+        lrc_name=closest_clf,
         ap_clu_idx=closest_ap_clu_idx
     )
 
@@ -661,7 +662,7 @@ def process_cdr(
     - if merged => return
     - otherwise => compare in Cartesian space with all exemplars in the same LRC group
     4.2 (if not merged) Compare in Cartesian space
-    - if merged => return 
+    - if merged => return
     """
 
     merged: bool = False
@@ -699,8 +700,8 @@ def process_cdr(
                 add_residue_identifier=True
             )
             if merge_with_any_exemplar_in_cartesian := merge_in_cartesian(
-                bb_df_a=exemplar_bb_df, 
-                bb_df_b=bb_df, 
+                bb_df_a=exemplar_bb_df,
+                bb_df_b=bb_df,
                 cdr=cdr
             ):
                 merged = True
@@ -712,10 +713,10 @@ def process_cdr(
     merged_ap_lab, merged_exemplar_id, merged_ap_size, merged_can_clu_idx = \
         None, None, None, None
     if merged_ap_clu_label is not None:
-        # find the ap cluster whose `ap_clu_cen_abdbid` === `merged_exemplar_id` 
+        # find the ap cluster whose `ap_clu_cen_abdbid` === `merged_exemplar_id`
         _, merged_ap, merged_can = fetch_lrc_ap_can(
-            lrc_ap_cluster=lrc_ap_cluster, 
-            lrc_name=closest_clf, 
+            lrc_ap_cluster=lrc_ap_cluster,
+            lrc_name=closest_clf,
             ap_clu_idx=merged_ap_clu_label
         )
         merged_ap_lab, merged_exemplar_id, merged_ap_size, merged_can_clu_idx = \
@@ -727,7 +728,7 @@ def process_cdr(
     ----------   query cdr info ----------
     Abdb entry: {abdbid}
     Closest LRC group, CDR cluster and family info:
-    CDR            can_clu    cluster_label    cluster_exemplar_id    cluster_size    canonical_cluster_index 
+    CDR            can_clu    cluster_label    cluster_exemplar_id    cluster_size    canonical_cluster_index
     {cdr:>3}    {closest_clf:>15}    {closest_ap_lab:>13}    {closest_exemplar_id:>19}    {closest_ap_size:>12}    {closest_can_clu_idx:>5}
     ----------   merge info     ----------
     Could merge with closest exemplar in torsional space?: {merge_with_closest_exemplar_in_torsional}
@@ -748,14 +749,14 @@ def process_cdr(
         "closest_lrc": closest_clf,                                # LRC group         (str) e.g. "H1-10-allT"
         "closest_AP_cluster_label": closest_ap_lab,               # AP  cluster       (int) e.g. 1
         "closest_AP_cluster_exemplar_id": closest_exemplar_id,     # AP  cluster       (str) e.g. "6azk_0"
-        "closest_AP_cluster_size": closest_ap_size,               # AP  cluster       (int) e.g. 93 
+        "closest_AP_cluster_size": closest_ap_size,               # AP  cluster       (int) e.g. 93
         "closest_can_cluster_index": closest_can_clu_idx,          # CAN cluster index (int) e.g. 4
         # merged AP/CAN cluster summary
         "merged_AP_cluster_label": merged_ap_lab,                 # AP  cluster
         "merged_AP_cluster_exemplar_id": merged_exemplar_id,       # AP  cluster
         "merged_AP_cluster_size": merged_ap_size,                 # AP  cluster
-        "merged_can_cluster_index": merged_can_clu_idx,            # CAN cluster index 
-        # merging summary 
+        "merged_can_cluster_index": merged_can_clu_idx,            # CAN cluster index
+        # merging summary
         "merge_with_closest_exemplar_torsional": bool(merge_with_closest_exemplar_in_torsional),
         "merge_with_any_exemplar_cartesian": merge_with_any_exemplar_in_cartesian,
         "merged": merged,
@@ -763,16 +764,16 @@ def process_cdr(
 
 
 def worker(
-    abdbid: str, 
-    cdr: str = None, 
-    abdb_dir: Path = None, 
-    classifier_dir: Path = None, 
+    abdbid: str,
+    cdr: str = None,
+    abdb_dir: Path = None,
+    classifier_dir: Path = None,
     lrc_ap_cluster: Dict[str, Any] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
-    The core function that compare the input AbDb antibody with pre-calculated 
+    The core function that compare the input AbDb antibody with pre-calculated
     Length and Residue Configuration (LRC) Affinity Propagation (AP) clusters
     and return the closest cluster information for specified CDR type.
-    
+
     Args:
         abdbid (str): AbDb entry id e.g. "1ikf_0P"
         cdr (str, optional): CDR type e.g. "H1", "H2", "H3", "L1", "L2", "L3". Defaults to None.
@@ -782,7 +783,7 @@ def worker(
         classifier_dir (Path, optional): LRC AP classifier directory. Defaults to None.
         lrc_ap_cluster (Dict[str, Any], optional): LRC AP cluster information. Defaults to None.
     Returns:
-        List[Dict[str, Any]]: Either 
+        List[Dict[str, Any]]: Either
             - A list of dictionaries containing the closest cluster information for each CDR type
             - A dictionary containing the closest cluster information for the specified CDR type
     """
@@ -803,12 +804,12 @@ def worker(
     # ----------------------------------------
     dihedral_df = extract_phi_psi_omega(struct_df=struct_df)
     bb_df = extract_bb_atoms(struct_df=struct_df, add_residue_identifier=True)
-    
+
 
     # create a dictionary mapping CDR type to chain labels
     mapping = dihedral_df[['chain', 'cdr']].drop_duplicates().groupby('cdr')['chain'].apply(list).to_dict()
     # ----------------------------------------
-    # Specified CDRs 
+    # Specified CDRs
     # ----------------------------------------
     if cdr != "all":
         # modify mapping to only include the specified CDR type
@@ -818,7 +819,7 @@ def worker(
         except AssertionError:
             logger.error(f"CDR {cdr} not found in {abdbid}.")
             logger.warning("Continue with other CDRs ...")
-    
+
     # ----------------------------------------
     # Iterate over all CDR types
     # ----------------------------------------
@@ -853,7 +854,7 @@ def cli() -> argparse.Namespace:  # sourcery skip: inline-immediately-returned-v
     parser = argparse.ArgumentParser(description="Process a single abdb entry",
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                      epilog=textwrap.dedent("""
-        Example: 
+        Example:
             python classify_general_abdb_entry.py \
                 -o ./results \
                 -c all \
@@ -871,71 +872,71 @@ def cli() -> argparse.Namespace:  # sourcery skip: inline-immediately-returned-v
     # cdr
     parser.add_argument('-c', '--cdr', type=str, help="CDR type", default="all",
                         choices=["H1", "H2", "H3", "L1", "L2", "L3", "all"])
-    # output 
-    parser.add_argument('-o', '--outdir', type=Path, default=Path.cwd()/'output', 
+    # output
+    parser.add_argument('-o', '--outdir', type=Path, default=Path.cwd()/'output',
                         help="results directory")
-    # abdb 
-    parser.add_argument('-db', "--abdb", type=Path, default=BASE/'assets'/'ABDB', 
+    # abdb
+    parser.add_argument('-db', "--abdb", type=Path, default=BASE/'assets'/'ABDB',
                         help="AbDb directory (version: 20220926)")
-    # precalculated Length and Residue Configuration (LRC) Affinity Propagation (AP) clusters  
-    parser.add_argument('-clu', '--lrc_ap_clusters', type=Path, default=BASE/'assets'/'classifier', 
+    # precalculated Length and Residue Configuration (LRC) Affinity Propagation (AP) clusters
+    parser.add_argument('-clu', '--lrc_ap_clusters', type=Path, default=BASE/'assets'/'classifier',
                         help="Length and Residue Configuration (LRC) Affinity Propagation (AP) classifier directory")
-    # LRC AP cluster associated info file  
-    parser.add_argument('-f', '--lrc_ap_info', type=Path, default=BASE/'assets'/'LRC_AP_cluster.json', 
+    # LRC AP cluster associated info file
+    parser.add_argument('-f', '--lrc_ap_info', type=Path, default=BASE/'assets'/'LRC_AP_cluster.json',
                         help="LRC_AP_cluster.json file path that holds information about each precalculated LRC AP cluster")
-    # add a log file handle 
-    parser.add_argument('-l', '--log', type=Path, default=None, 
+    # add a log file handle
+    parser.add_argument('-l', '--log', type=Path, default=None,
                         help="log file path to save log info. If None, only print to stdout and stderr.")
-    
+
     # parse args
     args = parser.parse_args()
-    
+
     return args
 
 
 def main(args) -> None:
     if args.log is not None:
         logger.add(sink=args.log, level="DEBUG")
-        
+
     if is_first_run():
         # first run
         logger.info("First run, downloading assets ...")
         download_and_extract_classifier()
-    
+
     # validate abdb, classifier, LRC_AP_fp
     assert args.abdb.exists(), f"{args.abdb} does not exist."
     assert args.lrc_ap_clusters.exists(), f"{args.lrc_ap_clusters} does not exist."
     assert args.lrc_ap_info.exists(), f"{args.lrc_ap_info} does not exist."
-    
+
     abdb_dir: Path       = args.abdb
     classifier_dir: Path = args.lrc_ap_clusters
     lrc_ap_fp: Path      = args.lrc_ap_info
     outdir: Path         = args.outdir
     abdbid: str          = args.abdbid
     cdr: str             = args.cdr
-    
+
     # ensure output directory exists
     outdir.mkdir(parents=True, exist_ok=True)
-    
+
     # parse the LRC_AP_cluster.json
     with open(file=lrc_ap_fp, mode="r") as f:
         LRC_AP_CLUSTER = json.load(f)
-    
-    # block: run the worker 
+
+    # block: run the worker
     # ------------------------------------------------------------------------------
     results, metadata = worker(
-        abdbid=abdbid, 
-        cdr=cdr, 
-        abdb_dir=abdb_dir, 
-        classifier_dir=classifier_dir, 
+        abdbid=abdbid,
+        cdr=cdr,
+        abdb_dir=abdb_dir,
+        classifier_dir=classifier_dir,
         lrc_ap_cluster=LRC_AP_CLUSTER
     )
     # ------------------------------------------------------------------------------
-    
+
     # save results
     o = (outdir / f"{abdbid}.json").resolve()
     results.append({'checkpoints': metadata})
-    results.append({'job': {'abdbid': abdbid, 
+    results.append({'job': {'abdbid': abdbid,
                             'cdr': cdr,
                             'abdb_dir': str(abdb_dir),
                             'classifier_dir': str(classifier_dir),
@@ -945,8 +946,8 @@ def main(args) -> None:
     logger.info(f"Results saved to {o}")
 
 
-def app() -> None: 
-    args = cli() 
+def app() -> None:
+    args = cli()
     main(args=args)
 
 
